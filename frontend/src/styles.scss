@@ -1,0 +1,291 @@
+/* Modern Design System - Dark Theme */
+:root {
+  --primary: #60a5fa;
+  --primary-dark: #3b82f6;
+  --secondary: #a78bfa;
+  --success: #4ade80;
+  --danger: #f87171;
+  --warning: #fb923c;
+  --info: #38bdf8;
+  --dark: #0a0a0f;
+  --darker: #0d0d15;
+  --light: #f8f9fa;
+  --gray: rgba(255, 255, 255, 0.4);
+  --border-radius: 16px;
+  --box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  background: var(--dark);
+  font-family: 'Inter', 'Poppins', -apple-system, 'Segoe UI', sans-serif;
+  color: #e0e0e0;
+}
+
+body {
+  background-attachment: fixed;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--primary);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-dark);
+}
+
+/* Material Overrides - Dark Theme */
+.mat-mdc-tab-group {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--border-radius);
+  padding: 20px;
+  box-shadow: var(--box-shadow);
+}
+
+.mat-mdc-tab-header {
+  border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+}
+
+.mat-mdc-tab-label {
+  font-weight: 600;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.mat-mdc-tab-label.mat-mdc-tab-label-active {
+  color: var(--primary) !important;
+}
+
+.mat-mdc-card {
+  border-radius: var(--border-radius) !important;
+  box-shadow: var(--box-shadow) !important;
+  transition: var(--transition);
+  background: rgba(255, 255, 255, 0.02) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  color: #e0e0e0 !important;
+}
+
+.mat-mdc-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.mat-mdc-toolbar {
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%) !important;
+  box-shadow: var(--box-shadow);
+  color: #e0e0e0 !important;
+}
+
+/* Material Form Fields */
+.mat-mdc-form-field {
+  color: #e0e0e0 !important;
+}
+
+.mat-mdc-input-element {
+  color: #e0e0e0 !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 8px !important;
+}
+
+.mat-mdc-form-field-label {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Material Buttons */
+.mat-mdc-raised-button {
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+}
+
+.mat-mdc-outlined-button {
+  border-radius: 10px !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Material Table */
+.mat-mdc-table {
+  background: transparent !important;
+  color: #e0e0e0 !important;
+}
+
+.mat-mdc-row {
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.mat-mdc-header-cell {
+  color: rgba(255, 255, 255, 0.5) !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-size: 11px !important;
+}
+
+.mat-mdc-cell {
+  color: #e0e0e0 !important;
+}
+
+/* Material Menu */
+.mat-mdc-menu-panel {
+  background: var(--darker) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+}
+
+.mat-mdc-menu-item {
+  color: #e0e0e0 !important;
+}
+
+.mat-mdc-menu-item:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Material Dialog */
+.mat-mdc-dialog-container {
+  background: var(--darker) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: var(--border-radius) !important;
+}
+
+.mat-mdc-dialog-title {
+  color: #f0f0f0 !important;
+}
+
+.mat-mdc-dialog-content {
+  color: #e0e0e0 !important;
+}
+
+/* Material Snackbar */
+.mat-mdc-snack-bar-container {
+  background: var(--darker) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  color: #e0e0e0 !important;
+}
+
+/* Material Progress Bar */
+.mat-mdc-progress-bar {
+  border-radius: 10px !important;
+}
+
+.mat-mdc-progress-bar-fill::after {
+  background: linear-gradient(90deg, var(--primary), var(--secondary)) !important;
+}
+
+/* Material Chips */
+.mat-mdc-chip {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #e0e0e0 !important;
+  border-radius: 20px !important;
+}
+
+/* Material Icons */
+.mat-icon {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(96, 165, 250, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0);
+  }
+}
+
+.dashboard {
+  animation: fadeInUp 0.6s ease;
+}
+
+.card-animate {
+  animation: fadeInUp 0.5s ease backwards;
+}
+
+.card-animate:nth-child(1) { animation-delay: 0.1s; }
+.card-animate:nth-child(2) { animation-delay: 0.2s; }
+.card-animate:nth-child(3) { animation-delay: 0.3s; }
+.card-animate:nth-child(4) { animation-delay: 0.4s; }
+.card-animate:nth-child(5) { animation-delay: 0.5s; }
+.card-animate:nth-child(6) { animation-delay: 0.6s; }
+
+/* Utility Classes */
+.glass-effect {
+  background: rgba(255, 255, 255, 0.03) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hover-lift {
+  transition: var(--transition);
+}
+
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Responsive Typography */
+@media (max-width: 768px) {
+  :root {
+    --border-radius: 12px;
+  }
+  
+  .mat-mdc-card {
+    padding: 16px !important;
+  }
+}
