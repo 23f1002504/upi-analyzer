@@ -21,7 +21,8 @@ from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    allow_credentials=True,
 )
 
 _parser = UPIPDFParser()
