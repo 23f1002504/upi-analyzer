@@ -76,11 +76,14 @@ interface User { id:number; email:string; name:string; }
     <div class="sb-filter" *ngIf="totalStored">
       <div class="sb-filter-lbl">Date range</div>
       <div class="sb-dates">
-        <input type="date" class="din" [(ngModel)]="filterFrom" (change)="onDateFilter()" [min]="dateMin" [max]="dateMax">
+        <input type="date" class="din" [(ngModel)]="filterFrom" (change)="onDateFilter()">
         <span class="din-sep">→</span>
-        <input type="date" class="din" [(ngModel)]="filterTo"   (change)="onDateFilter()" [min]="dateMin" [max]="dateMax">
+        <input type="date" class="din" [(ngModel)]="filterTo"   (change)="onDateFilter()">
       </div>
-      <button class="sb-reset" *ngIf="filterFrom||filterTo" (click)="resetDates()">Reset dates</button>
+      <div class="date-actions">
+        <button class="sb-reset" (click)="clearAllDates()">All time</button>
+        <button class="sb-reset" (click)="setThisMonth()">This month</button>
+      </div>
       <div class="sb-range-info" *ngIf="filterFrom||filterTo">{{ analytics?.transaction_count||0 }} of {{ totalStored }} transactions</div>
     </div>
 
@@ -282,17 +285,42 @@ interface User { id:number; email:string; name:string; }
       </div>
       <div class="tbl-box">
         <table class="tbl">
-          <thead><tr><th>Merchant</th><th>Amount</th><th>Type</th><th>Date</th><th>Category</th><th>Status</th></tr></thead>
+          <thead><tr>
+            <th>Merchant</th><th>Amount</th><th>Type</th><th>Date</th>
+            <th>Category</th><th>Status</th><th title="Include in analytics">⬤</th>
+          </tr></thead>
           <tbody>
-            <tr *ngFor="let t of filteredTxns.slice(0,showN)">
-              <td class="td-m">{{ t.merchant }}</td>
-              <td class="td-a" [class.r]="t.transaction_type==='sent'" [class.g]="t.transaction_type==='received'">
+            <tr *ngFor="let t of filteredTxns.slice(0,showN)" [class.excluded-row]="!t.included">
+              <td class="td-m" [class.dim]="!t.included">{{ t.merchant }}</td>
+              <td class="td-a" [class.r]="t.transaction_type==='sent'" [class.g]="t.transaction_type==='received'" [class.dim]="!t.included">
                 {{ t.transaction_type==='sent'?'-':'+' }}₹{{ t.amount | number:'1.0-0' }}
               </td>
               <td><span class="pill" [class.ps]="t.transaction_type==='sent'" [class.pr]="t.transaction_type==='received'">{{ t.transaction_type }}</span></td>
-              <td class="td-d">{{ t.date | date:'d MMM yy' }}</td>
-              <td class="td-c">{{ t.category }}</td>
-              <td class="td-st" [class.g]="t.note==='SUCCESS'" [class.r]="t.note==='FAILED'">{{ t.note }}</td>
+              <td class="td-d" [class.dim]="!t.included">{{ t.date | date:'d MMM yy' }}</td>
+              <td class="td-cat">
+                <div *ngIf="editingCat !== t.id" class="cat-cell" (click)="startEditCat(t)">
+                  <span class="cat-lbl" [class.custom-cat]="t.custom_category">{{ t.category }}</span>
+                  <span class="cat-edit-ico">✎</span>
+                </div>
+                <div *ngIf="editingCat === t.id" class="cat-edit-wrap">
+                  <select class="cat-sel" [(ngModel)]="editingCatVal" (change)="onCatChange(t)">
+                    <option *ngFor="let c of allSystemCats" [value]="c">{{ c }}</option>
+                    <option value="__custom__">+ Custom…</option>
+                  </select>
+                  <input *ngIf="editingCatVal==='__custom__'" class="cat-custom-in"
+                    [(ngModel)]="customCatInput" placeholder="Custom category"
+                    (keydown.enter)="saveCat(t)" (keydown.escape)="editingCat=null">
+                  <button class="cat-save" (click)="saveCat(t)">✓</button>
+                  <button class="cat-cancel" (click)="editingCat=null">✕</button>
+                </div>
+              </td>
+              <td class="td-st" [class.g]="t.note==='SUCCESS'" [class.r]="t.note==='FAILED'" [class.dim]="!t.included">{{ t.note }}</td>
+              <td class="td-toggle">
+                <button class="toggle-btn" [class.on]="t.included" [class.off]="!t.included"
+                  (click)="toggleIncluded(t)" [title]="t.included ? 'Included — click to exclude' : 'Excluded — click to include'">
+                  {{ t.included ? '●' : '○' }}
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -411,7 +439,9 @@ interface User { id:number; email:string; name:string; }
     .din{background:#111;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:6px 7px;font-size:11px;width:100%;outline:none;color-scheme:dark}
     .din:focus{border-color:var(--border2);color:#e0e0e0}
     .din-sep{color:var(--text3);font-size:11px;flex-shrink:0}
-    .sb-reset{background:none;border:none;color:var(--text3);font-size:11px;cursor:pointer;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+    .date-actions{display:flex;gap:6px;margin-bottom:4px}
+    .sb-reset{background:#141414;border:1px solid var(--border);color:var(--text2);font-size:11px;cursor:pointer;padding:4px 8px;border-radius:5px;transition:all .15s}
+    .sb-reset:hover{border-color:var(--border2);color:#e0e0e0}
     .sb-reset:hover{color:var(--text2)}
     .sb-range-info{font-size:11px;color:var(--text3);margin-top:4px;margin-bottom:4px}
 
@@ -572,6 +602,27 @@ interface User { id:number; email:string; name:string; }
     .chat-send:not(:disabled):hover{background:#222;color:var(--text);border-color:var(--border2)}
     .chat-send:disabled{opacity:.25;cursor:default}
 
+
+    .excluded-row td { opacity:.45 }
+    .dim { opacity:.4 }
+    .td-cat { min-width:130px }
+    .cat-cell { display:flex; align-items:center; gap:5px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .15s }
+    .cat-cell:hover { background:#1a1a1a }
+    .cat-lbl { font-size:12px; color:var(--text2) }
+    .cat-lbl.custom-cat { color:#a78bfa }
+    .cat-edit-ico { font-size:10px; color:var(--text3); opacity:0; transition:opacity .15s }
+    .cat-cell:hover .cat-edit-ico { opacity:1 }
+    .cat-edit-wrap { display:flex; align-items:center; gap:4px; flex-wrap:wrap }
+    .cat-sel { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 6px; font-size:11px; outline:none; max-width:140px }
+    .cat-custom-in { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 8px; font-size:11px; outline:none; width:120px }
+    .cat-save { background:#0a2a14; border:1px solid #1a5a2a; color:var(--green); border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
+    .cat-cancel { background:#1a1a1a; border:1px solid var(--border); color:var(--text3); border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
+    .td-toggle { text-align:center; width:40px }
+    .toggle-btn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 6px; border-radius:4px; transition:all .15s; line-height:1 }
+    .toggle-btn.on { color:var(--green) }
+    .toggle-btn.off { color:var(--text3) }
+    .toggle-btn:hover { background:#1a1a1a }
+    .txn-excl { font-size:11px; color:var(--text3); font-weight:400 }
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -607,7 +658,12 @@ export class AppComponent implements OnInit {
   toast = { msg: '', ok: true };
   showN = 100;
   allCats: string[] = [];
-  fType = ''; fCat = ''; fSearch = '';
+  fType = ''; fCat = ''; fSearch = ''; fIncluded = '';
+  allSystemCats: string[] = ['Credit Card','Education','Entertainment','Food & Grocery',
+    'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities'];
+  editingCat: number|null = null;
+  editingCatVal = '';
+  customCatInput = '';
 
   // AI
   messages: Message[] = [];
@@ -708,7 +764,7 @@ export class AppComponent implements OnInit {
 
   loadCategories() {
     this.http.get<any>(`${this.api}/categories`, { headers: this.getHeaders() }).subscribe({
-      next: (r) => { this.allSystemCats = r.categories || this.allSystemCats; },
+      next: (r) => { if (r.categories?.length) this.allSystemCats = r.categories; },
       error: () => {}
     });
   }
@@ -741,41 +797,91 @@ export class AppComponent implements OnInit {
     });
   }
 
+  // Keep API date/datetime values compatible with <input type="date>
+  // and with the analytics query parameters.
+  private dateOnly(value: any): string {
+    if (!value) return '';
+    const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
+  }
+
   loadDateRange() {
     this.http.get<any>(`${this.api}/date-range`, { headers: this.getHeaders() }).subscribe({
       next: (r) => {
         this.totalStored = r.count;
-        this.dateMin = r.min||''; this.dateMax = r.max||'';
-        if (!this.filterFrom) this.filterFrom = r.min||'';
-        if (!this.filterTo)   this.filterTo   = r.max||'';
+        this.dateMin = this.dateOnly(r.min);
+        this.dateMax = this.dateOnly(r.max);
+        if (!this.filterFrom) this.filterFrom = this.dateMin;
+        if (!this.filterTo)   this.filterTo   = this.dateMax;
         if (r.count) this.loadAnalytics();
       }, error: ()=>{}
     });
   }
 
   onDateFilter() { this.loadAnalytics(); }
-  resetDates() { this.filterFrom=this.dateMin; this.filterTo=this.dateMax; this.loadAnalytics(); }
+
+  clearAllDates() {
+    this.filterFrom = '';
+    this.filterTo   = '';
+    this.loadAnalytics();
+  }
+
+  resetDates() {
+    this.filterFrom = this.dateMin;
+    this.filterTo   = this.dateMax;
+    this.loadAnalytics();
+  }
+
+  setThisMonth() {
+    const now   = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    this.filterFrom = first.toISOString().slice(0,10);
+    this.filterTo   = last.toISOString().slice(0,10);
+    this.loadAnalytics();
+  }
+
+  setLast30() {
+    const to   = new Date();
+    const from = new Date(); from.setDate(from.getDate() - 30);
+    this.filterFrom = from.toISOString().slice(0,10);
+    this.filterTo   = to.toISOString().slice(0,10);
+    this.loadAnalytics();
+  }
 
   loadAnalytics() {
     const p: any = {};
-    if (this.filterFrom) p['date_from'] = this.filterFrom;
-    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
+    const from = this.dateOnly(this.filterFrom);
+    const to = this.dateOnly(this.filterTo);
+    if (from) p['date_from'] = from;
+    if (to)   p['date_to']   = to + 'T23:59:59';
     this.http.get<any>(`${this.api}/analytics`, { params: p, headers: this.getHeaders() }).subscribe({
-      next: (a) => { this.analytics=a; this.buildCharts(); this.loadTransactions(); },
-      error: ()=>{}
+      next: (a) => {
+        this.analytics = a;
+        this.buildCharts();
+        this.loadTransactions();
+      },
+      error: (err) => {
+        // 404 means no transactions in range — clear analytics
+        if (err.status === 404) { this.analytics = null; this.transactions = []; this.filteredTxns = []; }
+      }
     });
   }
 
   loadTransactions() {
     const p: any = {};
-    if (this.filterFrom) p['date_from'] = this.filterFrom;
-    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
+    const from = this.dateOnly(this.filterFrom);
+    const to = this.dateOnly(this.filterTo);
+    if (from) p['date_from'] = from;
+    if (to)   p['date_to']   = to + 'T23:59:59';
     this.http.get<any>(`${this.api}/transactions`, { params: p, headers: this.getHeaders() }).subscribe({
       next: (r) => {
-        this.transactions = r.transactions||[];
+        this.transactions = r.transactions || [];
         this.filteredTxns = [...this.transactions];
-        this.allCats = [...new Set(this.transactions.map((t:any)=>t.category).filter(Boolean))] as string[];
-      }, error:()=>{}
+        this.allCats = [...new Set(this.transactions.map((t:any) => t.category).filter(Boolean))] as string[];
+        this.applyFilter();
+      },
+      error: () => {}
     });
   }
 
@@ -867,5 +973,44 @@ export class AppComponent implements OnInit {
     });
   }
 
-  private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
+  startEditCat(t: any) {
+    this.editingCat = t.id;
+    this.editingCatVal = t.category || '';
+    this.customCatInput = '';
+  }
+
+  onCatChange(t: any) {}
+
+  saveCat(t: any) {
+    const cat = this.editingCatVal === '__custom__'
+      ? this.customCatInput.trim()
+      : this.editingCatVal;
+    if (!cat) return;
+    this.http.patch<any>(`${this.api}/transactions/${t.id}`,
+      { category: cat }, { headers: this.getHeaders() }).subscribe({
+      next: (r) => {
+        t.category = r.category;
+        t.custom_category = r.custom_category;
+        this.editingCat = null;
+        this.customCatInput = '';
+        if (r.all_categories?.length) {
+          this.allSystemCats = r.all_categories;
+          this.allCats = r.all_categories;
+        }
+        this.loadAnalytics();
+        this.showToast('Category updated to "' + cat + '"');
+      },
+      error: () => this.showToast('Failed to update category', false)
+    });
+  }
+
+  toggleIncluded(t: any) {
+    this.http.patch<any>(`${this.api}/transactions/${t.id}`,
+      { included: !t.included }, { headers: this.getHeaders() }).subscribe({
+      next: (r) => { t.included = r.included; this.loadAnalytics(); },
+      error: () => this.showToast('Failed to update', false)
+    });
+  }
+
+    private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
 }

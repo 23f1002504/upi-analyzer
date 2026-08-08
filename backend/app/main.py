@@ -172,6 +172,86 @@ def _parse_gpay_csv(content: bytes) -> list[dict]:
     return results
 
 
+def _parse_phonepay_csv(content: bytes) -> list[dict]:
+    """
+    PhonePe CSV/TSV:
+      Tab or comma separated
+      Headers: Date, Time, Transaction Details, Transaction ID, UTR, Transaction Type, Credit/debit instrument, Amount
+      Date format: "Jun 15, 2026"
+      Transaction Type: CREDIT / DEBIT
+    """
+    import csv as _csv
+    lines = content.decode('utf-8', errors='ignore').splitlines()
+    results = []
+    header_found = False
+    month_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+                 'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+
+    def _pd(s):
+        s = re.sub(r'[",]', '', str(s)).strip()
+        m = re.match(r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})', s)
+        if not m: return None
+        month = month_map.get(m.group(1).lower()[:3])
+        if not month: return None
+        try: return datetime(int(m.group(3)), month, int(m.group(2)))
+        except: return None
+
+    for raw_line in lines:
+        # Try tab first, then csv
+        if '\t' in raw_line:
+            cols = [c.strip() for c in raw_line.split('\t')]
+        else:
+            try: cols = [c.strip().strip('"') for c in next(_csv.reader([raw_line]))]
+            except: cols = [c.strip() for c in raw_line.split(',')]
+
+        if not cols or not cols[0]: continue
+
+        # Detect header row
+        if cols[0].strip().lower() == 'date':
+            header_found = True
+            continue
+        if not header_found: continue
+        if len(cols) < 6: continue
+
+        date_obj = _pd(cols[0])
+        if not date_obj: continue
+
+        time_str     = cols[1].strip() if len(cols) > 1 else '00:00'
+        desc         = cols[2].strip() if len(cols) > 2 else ''
+        txn_type_raw = cols[5].strip() if len(cols) > 5 else ''
+        # Amount is last non-empty column (col 7, sometimes col 3)
+        amount_raw = ''
+        for i in [7, 6, 3]:
+            if len(cols) > i and cols[i].strip():
+                amount_raw = cols[i].strip()
+                break
+
+        # Skip header-like rows
+        if desc.lower() in ['transaction details', 'date', '']: continue
+        if 'upi transaction' in desc.lower(): continue
+
+        try: amount = float(re.sub(r'[₹,\s]', '', amount_raw))
+        except: continue
+        if amount <= 0: continue
+
+        txn_type = 'received' if 'credit' in txn_type_raw.lower() else 'sent'
+        merchant = desc
+        for prefix in ['received from ', 'paid to ', 'sent to ', 'payment to ', 'transferred to ', 'refund from ']:
+            if desc.lower().startswith(prefix):
+                merchant = desc[len(prefix):].strip()
+                break
+
+        if not merchant or merchant.lower() == 'nan': continue
+
+        results.append({
+            'date': date_obj.isoformat(), 'time': time_str,
+            'amount': amount, 'transaction_type': txn_type,
+            'merchant': merchant[:100], 'note': 'SUCCESS',
+            'cashback': 0.0, 'category': _parser._categorize_merchant(merchant),
+        })
+    return results
+
+
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
     q = db.query(TransactionDB)
     if user_id: q = q.filter(TransactionDB.user_id == str(user_id))
@@ -237,20 +317,27 @@ async def upload_csv(file: UploadFile = File(...),
     content = await file.read()
     rows = []
 
-    # Try GPay CSV (has date in col0, "Paid to/Received from" in col1)
+    # 1. PhonePe (tab/comma, Date header, CREDIT/DEBIT column)
     try:
-        gpay_rows = _parse_gpay_csv(content)
-        if gpay_rows:
-            rows = gpay_rows
-            print(f"GPay CSV: {len(rows)} transactions")
+        rows = _parse_phonepay_csv(content)
+        if rows: print(f"PhonePe: {len(rows)} txns")
     except Exception as e:
-        print(f"GPay CSV failed: {e}")
+        print(f"PhonePe failed: {e}")
 
-    # Try SuperMoney CSV
+    # 2. GPay CSV ("Paid to/Received from" pattern)
+    if not rows:
+        try:
+            rows = _parse_gpay_csv(content)
+            if rows: print(f"GPay: {len(rows)} txns")
+        except Exception as e:
+            print(f"GPay failed: {e}")
+
+    # 3. SuperMoney (positional, skiprows=1)
     if not rows:
         try:
             df = pd.read_csv(io.BytesIO(content), skiprows=1, header=None)
             rows = _parse_supermoney_df(df)
+            if rows: print(f"SuperMoney: {len(rows)} txns")
         except: pass
     if not rows:
         for skip in [0,1,2]:
@@ -361,57 +448,24 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.included is not None:
         t.included = req.included
     if req.category is not None:
+        # Store as custom_category if different from auto-detected
         t.custom_category = req.category if req.category != t.category else None
 
     db.commit()
-
-    # Return updated row + refreshed categories list
-    row = _row(t)
-
-    # Fetch updated categories
-    cq = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: cq = cq.filter(TransactionDB.user_id == str(uid))
-    custom = sorted({r[0] for r in cq.all() if r[0]})
-    default = ['Credit Card','Education','Entertainment','Food & Grocery',
-               'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities']
-    row['all_categories'] = sorted(set(default + custom))
-
-    return row
+    return _row(t)
 
 
 @app.get("/api/categories")
 def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
-
-    # Get all unique custom categories for this user
     q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
     if uid: q = q.filter(TransactionDB.user_id == str(uid))
-    custom = sorted({r[0] for r in q.all() if r[0]})
+    custom = list({r[0] for r in q.all() if r[0]})
 
-    default = ['Credit Card','Education','Entertainment','Food & Grocery',
-               'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities']
+    default = ['Credit Card','Healthcare','Travel','Shopping','Food & Grocery',
+               'Transport','Utilities','Entertainment','Education','Transfer','Other']
     all_cats = sorted(set(default + custom))
     return {"categories": all_cats, "custom": custom}
-
-
-class SaveCategoryReq(BaseModel):
-    name: str
-
-@app.post("/api/categories")
-def save_category(req: SaveCategoryReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
-    """Explicitly save a custom category (for future use without needing a transaction)."""
-    name = req.name.strip()
-    if not name or len(name) > 50:
-        raise HTTPException(400, "Invalid category name")
-    # We store categories implicitly via transactions — just return updated list
-    uid = user.id if user else None
-    q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
-    custom = sorted({r[0] for r in q.all() if r[0]})
-    default = ['Credit Card','Education','Entertainment','Food & Grocery',
-               'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities']
-    all_cats = sorted(set(default + custom + [name]))
-    return {"categories": all_cats, "custom": sorted(set(custom + [name]))}
 
 
 
