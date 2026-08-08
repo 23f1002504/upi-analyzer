@@ -6,7 +6,13 @@ import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
 # Priority: 1) Gemini (free, 1500/day)  2) Claude API  3) Ollama (local)
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL    = "gemini-1.5-flash"
+GEMINI_URL      = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
+CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
+CLAUDE_URL      = "https://api.anthropic.com/v1/messages"
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "deepseek-r1:8b")
