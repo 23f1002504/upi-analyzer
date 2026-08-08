@@ -418,7 +418,7 @@ interface User { id:number; email:string; name:string; }
     .shell{display:flex;height:100vh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,'Inter','Segoe UI',sans-serif;font-size:13px}
 
     /* ── SIDEBAR ── */
-    .sidebar{width:240px;flex-shrink:0;background:#0a0a0a;border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;overflow-y:auto;transition:transform .2s}
+    .sidebar{width:240px;min-width:240px;flex-shrink:0;background:#0a0a0a;border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;overflow-y:auto;transition:transform .2s;position:relative}
     .sb-brand{display:flex;align-items:center;gap:10px;padding:18px 16px 14px;border-bottom:1px solid var(--border)}
     .sb-logo{width:32px;height:32px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#0a0a0a;flex-shrink:0}
     .sb-name{font-size:13px;font-weight:600;color:#f0f0f0;letter-spacing:-.2px}
@@ -431,9 +431,9 @@ interface User { id:number; email:string; name:string; }
     .sb-pill{margin-left:auto;font-size:10px;background:#1a1a1a;color:var(--text3);padding:1px 7px;border-radius:10px}
     .sb-online{width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:auto;animation:pg 2s infinite}
     @keyframes pg{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.4)}50%{box-shadow:0 0 0 4px rgba(74,222,128,0)}}
-    .sb-gap{flex:1}
+    .sb-gap{flex:1;min-height:8px}
 
-    .sb-filter{padding:12px 14px 0;border-top:1px solid var(--border)}
+    .sb-filter{padding:12px 14px 8px;border-top:1px solid var(--border);flex-shrink:0}
     .sb-filter-lbl{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
     .sb-dates{display:flex;align-items:center;gap:6px;margin-bottom:6px}
     .din{background:#111;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:6px 7px;font-size:11px;width:100%;outline:none;color-scheme:dark}
@@ -445,7 +445,7 @@ interface User { id:number; email:string; name:string; }
     .sb-reset:hover{color:var(--text2)}
     .sb-range-info{font-size:11px;color:var(--text3);margin-top:4px;margin-bottom:4px}
 
-    .sb-foot{padding:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+    .sb-foot{padding:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0}
     .sb-import-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#151515;border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
     .sb-import-btn:hover{border-color:var(--border2);color:#e0e0e0;background:#181818}
     .sb-clear-btn{background:none;border:1px solid var(--border);color:var(--text3);border-radius:6px;padding:7px;font-size:11px;cursor:pointer;transition:all .15s}
@@ -715,8 +715,11 @@ export class AppComponent implements OnInit {
 
   @HostListener('window:resize') onResize() {
     const w = window.innerWidth;
-    this.cardW = Math.min(Math.floor((w - 240 - 48 - 32) / 2), 460);
-    this.wideW = Math.min(w - 240 - 48 - 32, 900);
+    const sidebar = w > 768 ? 240 : 0;
+    const padding = 48;
+    const avail = w - sidebar - padding;
+    this.cardW = Math.max(300, Math.min(Math.floor(avail / 2) - 8, 480));
+    this.wideW = Math.max(300, Math.min(avail - 16, 920));
   }
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
@@ -760,6 +763,8 @@ export class AppComponent implements OnInit {
     this.checkOllama();
     this.loadDateRange();
     this.loadCategories();
+    // Recalculate chart sizes after DOM is ready
+    setTimeout(() => this.onResize(), 100);
   }
 
   loadCategories() {
@@ -797,24 +802,17 @@ export class AppComponent implements OnInit {
     });
   }
 
-  // Keep API date/datetime values compatible with <input type="date>
-  // and with the analytics query parameters.
-  private dateOnly(value: any): string {
-    if (!value) return '';
-    const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
-    return match ? match[1] : '';
-  }
-
   loadDateRange() {
     this.http.get<any>(`${this.api}/date-range`, { headers: this.getHeaders() }).subscribe({
       next: (r) => {
-        this.totalStored = r.count;
-        this.dateMin = this.dateOnly(r.min);
-        this.dateMax = this.dateOnly(r.max);
-        if (!this.filterFrom) this.filterFrom = this.dateMin;
-        if (!this.filterTo)   this.filterTo   = this.dateMax;
-        if (r.count) this.loadAnalytics();
-      }, error: ()=>{}
+        this.totalStored = r.count || 0;
+        this.dateMin = r.min || '';
+        this.dateMax = r.max || '';
+        if (!this.filterFrom) this.filterFrom = r.min || '';
+        if (!this.filterTo)   this.filterTo   = r.max || '';
+        if (this.totalStored > 0) this.loadAnalytics();
+      },
+      error: () => {}
     });
   }
 
@@ -851,10 +849,8 @@ export class AppComponent implements OnInit {
 
   loadAnalytics() {
     const p: any = {};
-    const from = this.dateOnly(this.filterFrom);
-    const to = this.dateOnly(this.filterTo);
-    if (from) p['date_from'] = from;
-    if (to)   p['date_to']   = to + 'T23:59:59';
+    if (this.filterFrom) p['date_from'] = this.filterFrom;
+    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
     this.http.get<any>(`${this.api}/analytics`, { params: p, headers: this.getHeaders() }).subscribe({
       next: (a) => {
         this.analytics = a;
@@ -870,10 +866,8 @@ export class AppComponent implements OnInit {
 
   loadTransactions() {
     const p: any = {};
-    const from = this.dateOnly(this.filterFrom);
-    const to = this.dateOnly(this.filterTo);
-    if (from) p['date_from'] = from;
-    if (to)   p['date_to']   = to + 'T23:59:59';
+    if (this.filterFrom) p['date_from'] = this.filterFrom;
+    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
     this.http.get<any>(`${this.api}/transactions`, { params: p, headers: this.getHeaders() }).subscribe({
       next: (r) => {
         this.transactions = r.transactions || [];
@@ -907,7 +901,10 @@ export class AppComponent implements OnInit {
       name: m.name?.length>18 ? m.name.substring(0,18)+'…' : m.name, value: m.spent
     }));
 
-    this.scheme = { domain: this.pieData.map(d=>d.color).concat(colors) };
+    // Update scheme with category colors
+    const catColors = this.pieData.map(d => d.color);
+    const fullColors = [...new Set([...catColors, ...colors])];
+    this.scheme = { name: 'upi', selectable: false, group: 'Ordinal', domain: fullColors };
   }
 
   applyFilter() {

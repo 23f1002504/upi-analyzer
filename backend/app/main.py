@@ -260,7 +260,10 @@ def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
         q = q.filter(TransactionDB.date <= datetime.fromisoformat(dt))
     if not all_rows:
-        q = q.filter(TransactionDB.included != False)
+        try:
+            q = q.filter(TransactionDB.included != False)
+        except Exception:
+            pass  # column may not exist in old DB
     return q.order_by(TransactionDB.date.desc()).all()
 
 
