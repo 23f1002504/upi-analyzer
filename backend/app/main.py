@@ -40,15 +40,17 @@ def _s(x):
     return str(x).strip() if (x is not None and str(x).strip() not in ('nan','None','')) else ''
 
 def _row(t: TransactionDB) -> dict:
+    custom_cat = getattr(t, 'custom_category', None)
+    included   = getattr(t, 'included', True)
     return {
         "id": t.id, "date": t.date.isoformat(), "time": t.time,
         "amount": t.amount, "transaction_type": t.transaction_type,
         "merchant": t.merchant,
-        "category": t.custom_category or t.category,
+        "category": custom_cat or t.category,
         "base_category": t.category,
-        "custom_category": t.custom_category,
+        "custom_category": custom_cat,
         "note": t.note, "cashback": t.cashback,
-        "included": t.included if t.included is not None else True,
+        "included": included if included is not None else True,
     }
 
 def _dedup_insert(db, rows, source, user_id=None):
@@ -452,7 +454,10 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
         t.included = req.included
     if req.category is not None:
         # Store as custom_category if different from auto-detected
+        try:
         t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
     return _row(t)
