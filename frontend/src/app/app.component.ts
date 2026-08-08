@@ -699,7 +699,9 @@ export class AppComponent implements OnInit {
     'How much did I receive vs spend?',
   ];
 
-  private api = 'http://localhost:8000/api';
+  private api = window.location.hostname === 'localhost'
+    ? 'http://localhost:8000/api'
+    : 'upi-analyzer-production-28c7.up.railway.app';
 
   constructor(private http: HttpClient) {}
 
