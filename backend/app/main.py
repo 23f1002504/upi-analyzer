@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import pandas as pd
@@ -455,9 +455,9 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.category is not None:
         # Store as custom_category if different from auto-detected
         try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
+        t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
     return _row(t)
