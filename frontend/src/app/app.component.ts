@@ -164,11 +164,36 @@ interface User { id:number; email:string; name:string; }
 
           <!-- Top merchants -->
           <div class="card wide" *ngIf="merchantData.length">
-            <div class="ch">Top merchants</div>
+            <div class="ch">Top spending merchants</div>
             <ngx-charts-bar-horizontal [results]="merchantData" [xAxis]="true" [yAxis]="true"
               [showDataLabel]="true" [tooltipDisabled]="false"
               [view]="[wideW, 280]" [scheme]="scheme">
             </ngx-charts-bar-horizontal>
+          </div>
+
+          <!-- Monthly compared -->
+          <div class="card wide" *ngIf="monthlyComparedData.length && monthlyComparedData[0]?.series?.length">
+            <div class="ch">Monthly — Spent vs Received</div>
+            <ngx-charts-bar-vertical-2d [results]="monthlyComparedData" [xAxis]="true" [yAxis]="true"
+              [showDataLabel]="true" [groupPadding]="4"
+              [view]="[wideW, 240]" [scheme]="schemeCompare">
+            </ngx-charts-bar-vertical-2d>
+          </div>
+
+          <!-- Top received sources -->
+          <div class="card" *ngIf="receivedSourceData.length">
+            <div class="ch">Top income sources</div>
+            <ngx-charts-bar-horizontal [results]="receivedSourceData" [xAxis]="true" [yAxis]="true"
+              [showDataLabel]="true" [view]="[cardW, 220]" [scheme]="schemeGreen">
+            </ngx-charts-bar-horizontal>
+          </div>
+
+          <!-- Received category -->
+          <div class="card" *ngIf="receivedCatData.length">
+            <div class="ch">Income by category</div>
+            <ngx-charts-pie-chart [results]="receivedCatData" [legend]="false" [labels]="false"
+              [doughnut]="true" [arcWidth]="0.38" [view]="[cardW, 220]" [scheme]="schemeGreen">
+            </ngx-charts-pie-chart>
           </div>
 
           <!-- Largest payments -->
@@ -679,10 +704,15 @@ export class AppComponent implements OnInit {
   monthlyData:  any[] = [];
   weeklyData:   any[] = [];
   dowData:      any[] = [];
-  merchantData: any[] = [];
+  merchantData:        any[] = [];
+  receivedSourceData:  any[] = [];
+  monthlyComparedData: any[] = [];
+  receivedCatData:     any[] = [];
   cardW = 420;
   wideW = 860;
 
+  schemeCompare: any = { name:'compare', selectable:false, group:'Ordinal', domain:['#f87171','#4ade80'] };
+  schemeGreen:   any = { name:'green',   selectable:false, group:'Ordinal', domain:['#4ade80','#34d399','#6ee7b7','#a7f3d0','#d1fae5'] };
   scheme: any = { domain: ['#60a5fa','#f97316','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#94a3b8','#fb923c','#34d399'] };
 
   private catColors: Record<string,string> = {
@@ -902,6 +932,22 @@ export class AppComponent implements OnInit {
     this.merchantData = (a.top_merchants||[]).slice(0,8).map((m:any)=>({
       name: m.name?.length>18 ? m.name.substring(0,18)+'…' : m.name, value: m.spent
     }));
+
+    // Received sources
+    this.receivedSourceData = (a.top_received_sources||[]).map((r:any)=>({
+      name: r.name?.length>18 ? r.name.substring(0,18)+'…' : r.name, value: r.received
+    }));
+
+    // Monthly compared (grouped bar: spent vs received)
+    this.monthlyComparedData = [
+      { name: 'Spent',    series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.spent}))    },
+      { name: 'Received', series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.received})) },
+    ];
+
+    // Received category breakdown
+    this.receivedCatData = Object.entries(a.received_category||{})
+      .map(([name,value])=>({name, value: value as number}))
+      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
 
     // Update scheme with category colors
     const catColors = this.pieData.map(d => d.color);

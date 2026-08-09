@@ -5,10 +5,10 @@ from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Priority: 1) Gemini (free, 1500/day)  2) Claude API  3) Ollama (local)
-GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL    = "gemini-1.5-flash"
-GEMINI_URL      = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+# Priority: 1) Groq (free, 14400/day, fast)  2) Claude API  3) Ollama (local)
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
+GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
 CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
@@ -108,20 +108,21 @@ def _stats() -> dict:
 
 
 # ── LLM calls ─────────────────────────────────────────────────────────────────
-def _call_gemini(prompt: str) -> Optional[str]:
-    """Gemini 1.5 Flash — completely free, 1500 requests/day."""
-    if not GEMINI_API_KEY: return None
+def _call_groq(prompt: str) -> Optional[str]:
+    """Groq — free, 14400 req/day, very fast."""
+    if not GROQ_API_KEY: return None
     try:
         resp = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"maxOutputTokens": 512, "temperature": 0.3}},
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 512, "temperature": 0.3},
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"Gemini error: {e}"); return None
+        print(f"Groq error: {e}"); return None
 
 
 def _call_claude(prompt: str) -> Optional[str]:
@@ -159,7 +160,7 @@ def _call_ollama(prompt: str) -> str:
 
 
 def _call_llm(prompt: str) -> str:
-    return _call_gemini(prompt) or _call_claude(prompt) or _call_ollama(prompt)
+    return _call_groq(prompt) or _call_claude(prompt) or _call_ollama(prompt)
 
 
 # ── Query ─────────────────────────────────────────────────────────────────────
@@ -182,15 +183,15 @@ Relevant transactions:
 Question: {safe_q}
 Answer:"""
 
-    provider = "gemini" if GEMINI_API_KEY else ("claude" if CLAUDE_API_KEY else "ollama")
+    provider = "groq" if GROQ_API_KEY else ("claude" if CLAUDE_API_KEY else "ollama")
     return {"answer": _call_llm(prompt), "sources": [h["document"] for h in hits[:3]],
             "stats": stats, "provider": provider}
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
-    if GEMINI_API_KEY:
-        return {"running": True, "models": [GEMINI_MODEL], "active_model": GEMINI_MODEL, "provider": "gemini"}
+    if GROQ_API_KEY:
+        return {"running": True, "models": [GROQ_MODEL], "active_model": GROQ_MODEL, "provider": "groq"}
     if CLAUDE_API_KEY:
         return {"running": True, "models": [CLAUDE_MODEL], "active_model": CLAUDE_MODEL, "provider": "claude"}
     try:
