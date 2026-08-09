@@ -701,7 +701,7 @@ export class AppComponent implements OnInit {
 
   private api = window.location.hostname === 'localhost'
     ? 'http://localhost:8000/api'
-    : 'upi-analyzer-production-28c7.up.railway.app';
+    : 'https://upi-analyzer-production-28c7.up.railway.app/api';
 
   constructor(private http: HttpClient) {}
 
