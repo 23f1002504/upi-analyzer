@@ -5,7 +5,6 @@ from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Priority: 1) Groq (free, 14400/day, fast)  2) Claude API  3) Ollama (local)
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
 GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
@@ -42,11 +41,11 @@ def _get_collection():
 
 # ── Data masking ──────────────────────────────────────────────────────────────
 _MASKS = [
-    (re.compile(r'\b[X*]{2,}\d{4}\b'),         '[ACCT]'),
-    (re.compile(r'\b[\w.\-]+@[\w]+\b'),          '[UPI]'),
-    (re.compile(r'\b[6-9]\d{9}\b'),              '[PHONE]'),
-    (re.compile(r'\b\d{10,}\b'),                 '[ID]'),
-    (re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b'),     '[PAN]'),
+    (re.compile(r'\b[X*]{2,}\d{4}\b'),     '[ACCT]'),
+    (re.compile(r'\b[\w.\-]+@[\w]+\b'),     '[UPI]'),
+    (re.compile(r'\b[6-9]\d{9}\b'),         '[PHONE]'),
+    (re.compile(r'\b\d{10,}\b'),            '[ID]'),
+    (re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b'),'[PAN]'),
 ]
 
 def mask(text: str) -> str:
@@ -55,7 +54,7 @@ def mask(text: str) -> str:
     return text
 
 
-# ── Index ─────────────────────────────────────────────────────────────────────
+# ── Index — stores category-level data only, no merchant names ────────────────
 def index_transactions(transactions: list[dict]) -> dict:
     col = _get_collection()
     if col.count() > 0:
@@ -64,59 +63,73 @@ def index_transactions(transactions: list[dict]) -> dict:
     docs, ids, metas = [], [], []
     for i, t in enumerate(transactions):
         amount   = float(t.get("amount", 0))
-        merchant = mask(str(t.get("merchant", "Unknown")))
-        date     = str(t.get("date", ""))[:10]
         txn_type = str(t.get("transaction_type", "sent"))
         category = str(t.get("category", "Other"))
         cashback = float(t.get("cashback", 0) or 0)
+        month    = str(t.get("date", ""))[:7]  # YYYY-MM only
 
-        direction = "paid to" if txn_type == "sent" else "received from"
-        doc = f"Txn {i+1}: Rs.{abs(amount):.0f} {direction} {merchant} on {date}. Category: {category}."
+        # Category-level doc — no merchant name, no exact date
+        direction = "outgoing" if txn_type == "sent" else "incoming"
+        doc = f"Rs.{abs(amount):.0f} {direction} {category} in {month}."
+
         docs.append(doc)
         ids.append(f"txn_{i}")
-        metas.append({"amount": amount, "merchant": merchant, "date": date,
-                      "transaction_type": txn_type, "category": category, "cashback": cashback})
+        metas.append({"amount": amount, "transaction_type": txn_type,
+                      "category": category, "cashback": cashback, "month": month})
 
     col.add(documents=docs, ids=ids, metadatas=metas)
     return {"indexed": len(docs), "status": "ok"}
 
 
-# ── Retrieve ──────────────────────────────────────────────────────────────────
-def retrieve(query: str, n: int = 8) -> list[dict]:
-    col = _get_collection()
-    if col.count() == 0: return []
-    r = col.query(query_texts=[query], n_results=min(n, col.count()))
-    return [{"document": d, "metadata": m} for d, m in zip(r["documents"][0], r["metadatas"][0])]
-
-
-def _stats() -> dict:
+# ── Local stats — computed in Python, never sent as raw data ──────────────────
+def _compute_stats() -> dict:
     col = _get_collection()
     if col.count() == 0: return {}
     metas = col.get(include=["metadatas"])["metadatas"]
-    df = pd.DataFrame(metas)
-    sent = df[df["transaction_type"]=="sent"]["amount"].abs()
-    recv = df[df["transaction_type"]=="received"]["amount"].abs()
-    top  = (df[df["transaction_type"]=="sent"].groupby("merchant")["amount"]
-            .apply(lambda x: x.abs().sum()).nlargest(5).to_dict())
+    df    = pd.DataFrame(metas)
+    sent  = df[df["transaction_type"] == "sent"]["amount"].abs()
+    recv  = df[df["transaction_type"] == "received"]["amount"].abs()
+
+    cat_breakdown = {}
+    if not sent.empty and "category" in df.columns:
+        sent_df = df[df["transaction_type"] == "sent"]
+        cat_breakdown = {
+            k: round(float(v), 2)
+            for k, v in sent_df.groupby("category")["amount"]
+            .apply(lambda x: x.abs().sum()).sort_values(ascending=False).items()
+        }
+
+    recv_breakdown = {}
+    if not recv.empty and "category" in df.columns:
+        recv_df = df[df["transaction_type"] == "received"]
+        recv_breakdown = {
+            k: round(float(v), 2)
+            for k, v in recv_df.groupby("category")["amount"]
+            .apply(lambda x: x.abs().sum()).items()
+        }
+
     return {
         "total_transactions": len(metas),
-        "total_spent":    round(float(sent.sum()), 2),
-        "total_received": round(float(recv.sum()), 2),
-        "total_cashback": round(float(df["cashback"].sum()), 2),
-        "top_merchants":  {k: round(float(v), 2) for k, v in top.items()},
+        "total_spent":        round(float(sent.sum()), 2),
+        "total_received":     round(float(recv.sum()), 2),
+        "total_cashback":     round(float(df["cashback"].sum()), 2),
+        "highest_expense":    round(float(sent.max()), 2) if not sent.empty else 0,
+        "category_breakdown": cat_breakdown,
+        "recv_breakdown":     recv_breakdown,
     }
 
 
 # ── LLM calls ─────────────────────────────────────────────────────────────────
 def _call_groq(prompt: str) -> Optional[str]:
-    """Groq — free, 14400 req/day, very fast."""
     if not GROQ_API_KEY: return None
     try:
         resp = requests.post(
             GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-                  "max_tokens": 512, "temperature": 0.3},
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 400, "temperature": 0.3},
             timeout=30,
         )
         resp.raise_for_status()
@@ -126,14 +139,14 @@ def _call_groq(prompt: str) -> Optional[str]:
 
 
 def _call_claude(prompt: str) -> Optional[str]:
-    """Claude API — zero data retention."""
     if not CLAUDE_API_KEY: return None
     try:
         resp = requests.post(
             CLAUDE_URL,
-            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01",
+            headers={"x-api-key": CLAUDE_API_KEY,
+                     "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": CLAUDE_MODEL, "max_tokens": 512,
+            json={"model": CLAUDE_MODEL, "max_tokens": 400,
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
@@ -144,7 +157,6 @@ def _call_claude(prompt: str) -> Optional[str]:
 
 
 def _call_ollama(prompt: str) -> str:
-    """Local Ollama — no data leaves your machine."""
     try:
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
@@ -154,7 +166,7 @@ def _call_ollama(prompt: str) -> str:
         resp.raise_for_status()
         return resp.json().get("response", "No response.")
     except requests.exceptions.ConnectionError:
-        return "AI offline. Run `ollama serve` for local AI, or set GEMINI_API_KEY for free cloud AI."
+        return "AI unavailable on cloud. Run locally with Ollama for AI features."
     except Exception as e:
         return f"AI error: {str(e)}"
 
@@ -163,40 +175,74 @@ def _call_llm(prompt: str) -> str:
     return _call_groq(prompt) or _call_claude(prompt) or _call_ollama(prompt)
 
 
-# ── Query ─────────────────────────────────────────────────────────────────────
+# ── Query — sends ONLY aggregated category totals to cloud LLM ───────────────
 def query(user_question: str) -> dict:
+    """
+    Privacy architecture:
+      Raw transactions → stays in SQLite (your server)
+      Individual txns  → stays in ChromaDB (your server)
+      Sent to LLM      → ONLY category totals (no merchants, no IDs, no dates)
+    """
     col = _get_collection()
     if col.count() == 0:
-        return {"answer": "No transactions indexed yet. Upload a CSV first.", "sources": []}
+        return {"answer": "No transactions indexed. Upload a CSV first.", "sources": []}
+
+    stats = _compute_stats()
+    if not stats:
+        return {"answer": "No data available.", "sources": []}
+
+    total_spent = stats["total_spent"]
+    cat = stats["category_breakdown"]
+
+    # Build anonymized aggregate summary
+    cat_lines = "\n".join(
+        f"  {name}: Rs.{amt} ({round(amt/max(total_spent,1)*100)}%)"
+        for name, amt in list(cat.items())[:8]
+    )
 
     safe_q = mask(user_question)
-    hits   = retrieve(safe_q)
-    stats  = _stats()
 
-    prompt = f"""You are a UPI transaction analyst. Answer using ONLY the data below. Use Rs. for amounts. Be concise.
+    prompt = f"""You are a personal finance analyst. Analyze this spending summary and answer the question.
+Use Rs. for amounts. Be practical and specific. 3-4 sentences max.
 
-Summary: {stats['total_transactions']} transactions, Rs.{stats['total_spent']} spent, Rs.{stats['total_received']} received.
+SPENDING SUMMARY (anonymized aggregates only):
+- Total spent:    Rs.{stats['total_spent']}
+- Total received: Rs.{stats['total_received']}
+- Net flow:       Rs.{round(stats['total_received'] - stats['total_spent'], 2)}
+- Transactions:   {stats['total_transactions']}
+- Largest single: Rs.{stats['highest_expense']}
 
-Relevant transactions:
-{chr(10).join(f"- {h['document']}" for h in hits)}
+Spending by category:
+{cat_lines}
 
 Question: {safe_q}
 Answer:"""
 
     provider = "groq" if GROQ_API_KEY else ("claude" if CLAUDE_API_KEY else "ollama")
-    return {"answer": _call_llm(prompt), "sources": [h["document"] for h in hits[:3]],
-            "stats": stats, "provider": provider}
+    answer   = _call_llm(prompt)
+
+    return {
+        "answer":   answer,
+        "sources":  [],
+        "stats":    stats,
+        "provider": provider,
+        "privacy":  "Only category totals sent to AI. No merchants, IDs, or individual transactions."
+    }
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
     if GROQ_API_KEY:
-        return {"running": True, "models": [GROQ_MODEL], "active_model": GROQ_MODEL, "provider": "groq"}
+        return {"running": True, "models": [GROQ_MODEL],
+                "active_model": GROQ_MODEL, "provider": "groq"}
     if CLAUDE_API_KEY:
-        return {"running": True, "models": [CLAUDE_MODEL], "active_model": CLAUDE_MODEL, "provider": "claude"}
+        return {"running": True, "models": [CLAUDE_MODEL],
+                "active_model": CLAUDE_MODEL, "provider": "claude"}
     try:
         resp   = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         models = [m["name"] for m in resp.json().get("models", [])]
-        return {"running": bool(models), "models": models, "active_model": OLLAMA_MODEL, "provider": "ollama"}
+        return {"running": bool(models), "models": models,
+                "active_model": OLLAMA_MODEL, "provider": "ollama"}
     except:
-        return {"running": False, "models": [], "active_model": OLLAMA_MODEL, "provider": "none"}
+        return {"running": False, "models": [],
+                "active_model": OLLAMA_MODEL, "provider": "none"}
