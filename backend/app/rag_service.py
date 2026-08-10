@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "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")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
 GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
