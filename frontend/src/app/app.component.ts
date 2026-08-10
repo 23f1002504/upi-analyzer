@@ -824,10 +824,15 @@ export class AppComponent implements OnInit {
   monthlyData:  any[] = [];
   weeklyData:   any[] = [];
   dowData:      any[] = [];
-  merchantData: any[] = [];
+  merchantData:        any[] = [];
+  receivedSourceData:  any[] = [];
+  monthlyComparedData: any[] = [];
+  receivedCatData:     any[] = [];
   cardW = 420;
   wideW = 860;
 
+  schemeCompare: any = { name:'compare', selectable:false, group:'Ordinal', domain:['#f87171','#4ade80'] };
+  schemeGreen:   any = { name:'green',   selectable:false, group:'Ordinal', domain:['#4ade80','#34d399','#6ee7b7','#a7f3d0'] };
   scheme: any = { domain: ['#60a5fa','#f97316','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#94a3b8','#fb923c','#34d399'] };
 
   private catColors: Record<string,string> = {
@@ -1060,6 +1065,19 @@ export class AppComponent implements OnInit {
     this.merchantData = (a.top_merchants||[]).slice(0,8).map((m:any)=>({
       name: m.name?.length>18 ? m.name.substring(0,18)+'…' : m.name, value: m.spent
     }));
+
+    this.receivedSourceData = (a.top_received_sources||[]).map((r:any)=>({
+      name: r.name?.length>18 ? r.name.substring(0,18)+'…' : r.name, value: r.received
+    }));
+
+    this.monthlyComparedData = [
+      { name: 'Spent',    series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.spent}))    },
+      { name: 'Received', series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.received})) },
+    ].filter(s => s.series.some((p:any) => p.value > 0));
+
+    this.receivedCatData = Object.entries(a.received_category||{})
+      .map(([name,value])=>({name, value: value as number}))
+      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
 
     // Update scheme with category colors
     const catColors = this.pieData.map(d => d.color);
