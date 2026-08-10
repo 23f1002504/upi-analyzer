@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "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")
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
 GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -135,7 +135,10 @@ def _call_groq(prompt: str) -> Optional[str]:
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"Groq error: {e}"); return None
+        import traceback
+        print(f"Groq error: {e}")
+        print(traceback.format_exc())
+        return None
 
 
 def _call_claude(prompt: str) -> Optional[str]:
@@ -156,23 +159,28 @@ def _call_claude(prompt: str) -> Optional[str]:
         print(f"Claude error: {e}"); return None
 
 
-def _call_ollama(prompt: str) -> str:
+def _call_ollama(prompt: str) -> Optional[str]:
     try:
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=120,
+            timeout=30,  # shorter timeout on cloud
         )
         resp.raise_for_status()
-        return resp.json().get("response", "No response.")
-    except requests.exceptions.ConnectionError:
-        return "AI unavailable on cloud. Run locally with Ollama for AI features."
-    except Exception as e:
-        return f"AI error: {str(e)}"
+        text = resp.json().get("response", "")
+        return text if text else None
+    except Exception:
+        return None  # Ollama not available — fall through
 
 
 def _call_llm(prompt: str) -> str:
-    return _call_groq(prompt) or _call_claude(prompt) or _call_ollama(prompt)
+    result = _call_groq(prompt)
+    if result: return result
+    result = _call_claude(prompt)
+    if result: return result
+    result = _call_ollama(prompt)
+    if result: return result
+    return "AI service unavailable. Check GROQ_API_KEY in Railway environment variables."
 
 
 # ── Query — sends ONLY aggregated category totals to cloud LLM ───────────────
@@ -185,7 +193,7 @@ def query(user_question: str) -> dict:
     """
     col = _get_collection()
     if col.count() == 0:
-        return {"answer": "No transactions indexed. Upload a CSV first.", "sources": []}
+        return {"answer": "No transactions indexed yet. Please upload a CSV and click Re-index.", "sources": []}
 
     stats = _compute_stats()
     if not stats:
