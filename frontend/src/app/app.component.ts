@@ -5,7 +5,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { NgxChartsModule, LegendPosition } from '@swimlane/ngx-charts';
 
 interface Message { role:'user'|'assistant'; text:string; sources?:string[]; loading?:boolean; }
-interface User { id:number; email:string; name:string; }
+interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
 @Component({
   selector: 'app-root',
@@ -68,6 +68,11 @@ interface User { id:number; email:string; name:string; }
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
         AI Chat
         <span class="sb-online" *ngIf="ollamaOk"></span>
+      </button>
+      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin'); loadAdminData()" *ngIf="isAdmin">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Admin
+        <span class="sb-badge-red" *ngIf="adminStats?.online_now">{{ adminStats?.online_now }}</span>
       </button>
     </nav>
 
@@ -164,36 +169,11 @@ interface User { id:number; email:string; name:string; }
 
           <!-- Top merchants -->
           <div class="card wide" *ngIf="merchantData.length">
-            <div class="ch">Top spending merchants</div>
+            <div class="ch">Top merchants</div>
             <ngx-charts-bar-horizontal [results]="merchantData" [xAxis]="true" [yAxis]="true"
               [showDataLabel]="true" [tooltipDisabled]="false"
               [view]="[wideW, 280]" [scheme]="scheme">
             </ngx-charts-bar-horizontal>
-          </div>
-
-          <!-- Monthly compared -->
-          <div class="card wide" *ngIf="monthlyComparedData.length && monthlyComparedData[0]?.series?.length">
-            <div class="ch">Monthly — Spent vs Received</div>
-            <ngx-charts-bar-vertical-2d [results]="monthlyComparedData" [xAxis]="true" [yAxis]="true"
-              [showDataLabel]="true" [groupPadding]="4"
-              [view]="[wideW, 240]" [scheme]="schemeCompare">
-            </ngx-charts-bar-vertical-2d>
-          </div>
-
-          <!-- Top received sources -->
-          <div class="card" *ngIf="receivedSourceData.length">
-            <div class="ch">Top income sources</div>
-            <ngx-charts-bar-horizontal [results]="receivedSourceData" [xAxis]="true" [yAxis]="true"
-              [showDataLabel]="true" [view]="[cardW, 220]" [scheme]="schemeGreen">
-            </ngx-charts-bar-horizontal>
-          </div>
-
-          <!-- Received category -->
-          <div class="card" *ngIf="receivedCatData.length">
-            <div class="ch">Income by category</div>
-            <ngx-charts-pie-chart [results]="receivedCatData" [legend]="false" [labels]="false"
-              [doughnut]="true" [arcWidth]="0.38" [view]="[cardW, 220]" [scheme]="schemeGreen">
-            </ngx-charts-pie-chart>
           </div>
 
           <!-- Largest payments -->
@@ -243,18 +223,43 @@ interface User { id:number; email:string; name:string; }
 
     <!-- ANALYTICS -->
     <main class="page" *ngIf="tab==='analytics' && analytics">
+
+      <!-- Received summary strip -->
+      <div class="recv-strip" *ngIf="analytics.total_received > 0">
+        <div class="recv-kpi">
+          <div class="recv-val">₹{{ analytics.total_received | number:'1.0-0' }}</div>
+          <div class="recv-lbl">Total received</div>
+        </div>
+        <div class="recv-kpi">
+          <div class="recv-val">{{ analytics.received_count || 0 }}</div>
+          <div class="recv-lbl">Incoming transactions</div>
+        </div>
+        <div class="recv-kpi">
+          <div class="recv-val" [class.g]="analytics.net_flow>=0" [class.r]="analytics.net_flow<0">
+            {{ analytics.net_flow>=0?'+':'' }}₹{{ analytics.net_flow | number:'1.0-0' }}
+          </div>
+          <div class="recv-lbl">Net flow</div>
+        </div>
+        <div class="recv-kpi">
+          <div class="recv-val">₹{{ analytics.average_transaction | number:'1.0-0' }}</div>
+          <div class="recv-lbl">Avg payment</div>
+        </div>
+      </div>
+
       <div class="grid">
 
-        <div class="card wide" *ngIf="weeklyData.length && weeklyData[0]?.series?.length > 1">
-          <div class="ch">Weekly spending trend</div>
-          <ngx-charts-line-chart [results]="weeklyData" [xAxis]="true" [yAxis]="true"
-            [showGridLines]="true" [tooltipDisabled]="false"
-            [view]="[wideW, 220]" [scheme]="scheme">
-          </ngx-charts-line-chart>
+        <!-- Monthly compared: Spent vs Received -->
+        <div class="card wide" *ngIf="monthlyComparedData.length && monthlyComparedData[0]?.series?.length">
+          <div class="ch">Monthly — Spent vs Received</div>
+          <ngx-charts-bar-vertical-2d [results]="monthlyComparedData"
+            [xAxis]="true" [yAxis]="true" [showDataLabel]="true"
+            [groupPadding]="4" [view]="[wideW, 240]" [scheme]="schemeCompare">
+          </ngx-charts-bar-vertical-2d>
         </div>
 
-        <div class="card wide" *ngIf="pieData.length">
-          <div class="ch">Category breakdown</div>
+        <!-- Spending category breakdown -->
+        <div class="card" *ngIf="pieData.length">
+          <div class="ch">Spending by category</div>
           <div class="cat-list">
             <div class="cat-row" *ngFor="let c of pieData">
               <span class="cat-dot" [style.background]="c.color"></span>
@@ -266,27 +271,37 @@ interface User { id:number; email:string; name:string; }
           </div>
         </div>
 
+        <!-- Received sources -->
+        <div class="card" *ngIf="receivedSourceData.length">
+          <div class="ch">Income sources</div>
+          <ngx-charts-bar-horizontal [results]="receivedSourceData"
+            [xAxis]="true" [yAxis]="true" [showDataLabel]="true"
+            [view]="[cardW, 220]" [scheme]="schemeGreen">
+          </ngx-charts-bar-horizontal>
+        </div>
+
+        <!-- Weekly trend -->
+        <div class="card wide" *ngIf="weeklyData.length && weeklyData[0]?.series?.length > 1">
+          <div class="ch">Weekly spending trend</div>
+          <ngx-charts-line-chart [results]="weeklyData" [xAxis]="true" [yAxis]="true"
+            [showGridLines]="true" [tooltipDisabled]="false"
+            [view]="[wideW, 200]" [scheme]="scheme">
+          </ngx-charts-line-chart>
+        </div>
+
+        <!-- Day of week -->
         <div class="card" *ngIf="dowData.length">
-          <div class="ch">Day of week</div>
+          <div class="ch">Spending by weekday</div>
           <ngx-charts-bar-vertical [results]="dowData" [xAxis]="true" [yAxis]="true"
             [showDataLabel]="true" [view]="[cardW, 220]" [scheme]="scheme">
           </ngx-charts-bar-vertical>
         </div>
 
-        <div class="card" *ngIf="analytics.recurring_merchants?.length">
-          <div class="ch">All recurring payments</div>
-          <div class="rows">
-            <div class="row-item" *ngFor="let r of analytics.recurring_merchants">
-              <div class="ri-l"><div class="ri-name">{{ r.merchant }}</div><div class="ri-sub">{{ r.count }}× · ₹{{ r.avg|number:'1.0-0' }} avg</div></div>
-              <div class="ri-val">₹{{ r.total|number:'1.0-0' }}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card wide" *ngIf="merchantData.length">
-          <div class="ch">Merchant comparison</div>
+        <!-- Top merchants -->
+        <div class="card" *ngIf="merchantData.length">
+          <div class="ch">Top spending merchants</div>
           <ngx-charts-bar-horizontal [results]="merchantData" [xAxis]="true" [yAxis]="true"
-            [showDataLabel]="true" [view]="[wideW, 300]" [scheme]="scheme">
+            [showDataLabel]="true" [view]="[cardW, 260]" [scheme]="scheme">
           </ngx-charts-bar-horizontal>
         </div>
 
@@ -399,7 +414,67 @@ interface User { id:number; email:string; name:string; }
         </div>
       </div>
     </div>
-  </div>
+  
+    <!-- ADMIN TAB -->
+    <main class="page" *ngIf="tab==='admin' && isAdmin">
+      <div class="admin-head">
+        <h2 class="admin-title">Admin Dashboard</h2>
+        <button class="admin-refresh" (click)="loadAdminData()" [disabled]="adminLoading">
+          {{ adminLoading ? 'Loading…' : '↻ Refresh' }}
+        </button>
+      </div>
+
+      <!-- Platform stats -->
+      <div class="admin-kpis" *ngIf="adminStats">
+        <div class="admin-kpi">
+          <div class="ak-val">{{ adminStats.total_users }}</div>
+          <div class="ak-lbl">Total users</div>
+        </div>
+        <div class="admin-kpi online">
+          <div class="ak-val g">{{ adminStats.online_now }}</div>
+          <div class="ak-lbl">Online now <span class="online-dot">●</span></div>
+        </div>
+        <div class="admin-kpi">
+          <div class="ak-val">{{ adminStats.new_today }}</div>
+          <div class="ak-lbl">New today</div>
+        </div>
+        <div class="admin-kpi">
+          <div class="ak-val">{{ adminStats.total_txns | number }}</div>
+          <div class="ak-lbl">Total transactions</div>
+        </div>
+      </div>
+
+      <!-- Users table -->
+      <div class="admin-section">
+        <div class="admin-section-title">Users</div>
+        <div class="admin-tbl-box">
+          <table class="admin-tbl">
+            <thead><tr>
+              <th>Name</th><th>Email</th><th>Transactions</th>
+              <th>Last seen</th><th>Status</th><th>Role</th>
+            </tr></thead>
+            <tbody>
+              <tr *ngFor="let u of adminUsers" [class.online-row]="u.online">
+                <td class="au-name">{{ u.name }}</td>
+                <td class="au-email">{{ u.email }}</td>
+                <td class="au-txn">{{ u.txn_count }}</td>
+                <td class="au-time">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
+                <td>
+                  <span class="status-pill" [class.online-pill]="u.online" [class.offline-pill]="!u.online">
+                    {{ u.online ? '● Online' : '○ Offline' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="role-pill" [class.admin-pill]="u.is_admin">{{ u.is_admin ? 'Admin' : 'User' }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+</div>
 </div>
   `,
   styles: [`
@@ -410,12 +485,12 @@ interface User { id:number; email:string; name:string; }
     /* ── TOKENS ── */
     :root{
       --bg: #0d0d0d;
-      --surface: #141414;
-      --border: #202020;
-      --border2: #2a2a2a;
-      --text: #d4d4d4;
-      --text2: #888;
-      --text3: #444;
+      --surface: #161616;
+      --border: #252525;
+      --border2: #333333;
+      --text: #e0e0e0;
+      --text2: #aaa;
+      --text3: #666;
       --green: #4ade80;
       --red: #f87171;
       --blue: #60a5fa;
@@ -427,9 +502,9 @@ interface User { id:number; email:string; name:string; }
     .auth-box{width:360px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:36px 32px}
     .auth-logo{width:44px;height:44px;background:#fff;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#0d0d0d;margin-bottom:16px}
     .auth-title{font-size:20px;font-weight:700;color:#f0f0f0;letter-spacing:-.4px;margin-bottom:4px}
-    .auth-sub{font-size:13px;color:var(--text3);margin-bottom:24px}
+    .auth-sub{font-size:13px;color:#666;margin-bottom:24px}
     .auth-tabs{display:flex;gap:2px;background:#0d0d0d;border-radius:8px;padding:3px;margin-bottom:20px}
-    .auth-tabs button{flex:1;padding:7px;border:none;background:none;color:var(--text2);border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
+    .auth-tabs button{flex:1;padding:7px;border:none;background:none;color:#aaa;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
     .auth-tabs button.on{background:var(--surface);color:#f0f0f0;box-shadow:0 1px 4px rgba(0,0,0,.4)}
     .auth-form{display:flex;flex-direction:column;gap:10px}
     .auth-in{background:#0d0d0d;border:1px solid var(--border);color:#f0f0f0;border-radius:8px;padding:11px 14px;font-size:14px;outline:none;transition:border-color .15s}
@@ -447,45 +522,45 @@ interface User { id:number; email:string; name:string; }
     .sb-brand{display:flex;align-items:center;gap:10px;padding:18px 16px 14px;border-bottom:1px solid var(--border)}
     .sb-logo{width:32px;height:32px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#0a0a0a;flex-shrink:0}
     .sb-name{font-size:13px;font-weight:600;color:#f0f0f0;letter-spacing:-.2px}
-    .sb-user{font-size:11px;color:var(--text3);margin-top:1px}
+    .sb-user{font-size:11px;color:#666;margin-top:1px}
     .sb-nav{padding:10px 8px;display:flex;flex-direction:column;gap:2px}
-    .sb-lnk{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;border:none;background:none;color:var(--text3);cursor:pointer;font-size:13px;font-weight:500;text-align:left;width:100%;transition:all .15s;position:relative}
-    .sb-lnk:hover:not(:disabled){background:#131313;color:var(--text)}
-    .sb-lnk.on{background:#181818;color:#f0f0f0}
+    .sb-lnk{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;border:none;background:none;color:#666;cursor:pointer;font-size:13px;font-weight:500;text-align:left;width:100%;transition:all .15s;position:relative}
+    .sb-lnk:hover:not(:disabled){background:#1a1a1a;color:#e0e0e0}
+    .sb-lnk.on{background:#1e1e1e;color:#ffffff}
     .sb-lnk:disabled{opacity:.2;cursor:default}
-    .sb-pill{margin-left:auto;font-size:10px;background:#1a1a1a;color:var(--text3);padding:1px 7px;border-radius:10px}
+    .sb-pill{margin-left:auto;font-size:10px;background:#1a1a1a;color:#666;padding:1px 7px;border-radius:10px}
     .sb-online{width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:auto;animation:pg 2s infinite}
     @keyframes pg{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.4)}50%{box-shadow:0 0 0 4px rgba(74,222,128,0)}}
     .sb-gap{flex:1;min-height:8px}
 
     .sb-filter{padding:12px 14px 8px;border-top:1px solid var(--border);flex-shrink:0}
-    .sb-filter-lbl{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
+    .sb-filter-lbl{font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
     .sb-dates{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-    .din{background:#111;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:6px 7px;font-size:11px;width:100%;outline:none;color-scheme:dark}
+    .din{background:#111;border:1px solid var(--border);color:#aaa;border-radius:6px;padding:6px 7px;font-size:11px;width:100%;outline:none;color-scheme:dark}
     .din:focus{border-color:var(--border2);color:#e0e0e0}
-    .din-sep{color:var(--text3);font-size:11px;flex-shrink:0}
+    .din-sep{color:#666;font-size:11px;flex-shrink:0}
     .date-actions{display:flex;gap:6px;margin-bottom:4px}
-    .sb-reset{background:#141414;border:1px solid var(--border);color:var(--text2);font-size:11px;cursor:pointer;padding:4px 8px;border-radius:5px;transition:all .15s}
+    .sb-reset{background:#141414;border:1px solid var(--border);color:#aaa;font-size:11px;cursor:pointer;padding:4px 8px;border-radius:5px;transition:all .15s}
     .sb-reset:hover{border-color:var(--border2);color:#e0e0e0}
-    .sb-reset:hover{color:var(--text2)}
-    .sb-range-info{font-size:11px;color:var(--text3);margin-top:4px;margin-bottom:4px}
+    .sb-reset:hover{color:#aaa}
+    .sb-range-info{font-size:11px;color:#666;margin-top:4px;margin-bottom:4px}
 
     .sb-foot{padding:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0}
-    .sb-import-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#151515;border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
+    .sb-import-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#151515;border:1px solid var(--border);border-radius:8px;color:#aaa;cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
     .sb-import-btn:hover{border-color:var(--border2);color:#e0e0e0;background:#181818}
-    .sb-clear-btn{background:none;border:1px solid var(--border);color:var(--text3);border-radius:6px;padding:7px;font-size:11px;cursor:pointer;transition:all .15s}
+    .sb-clear-btn{background:none;border:1px solid var(--border);color:#666;border-radius:6px;padding:7px;font-size:11px;cursor:pointer;transition:all .15s}
     .sb-clear-btn:hover{border-color:#3a1515;color:var(--red);background:#1a0a0a}
-    .sb-logout{background:none;border:none;color:var(--text3);font-size:11px;cursor:pointer;padding:4px 0;text-align:left;transition:color .15s}
-    .sb-logout:hover{color:var(--text2)}
+    .sb-logout{background:none;border:none;color:#666;font-size:11px;cursor:pointer;padding:4px 0;text-align:left;transition:color .15s}
+    .sb-logout:hover{color:#aaa}
 
     .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:none}
 
     /* ── MAIN ── */
     .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
     .bar{height:50px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0;background:#0a0a0a}
-    .burger{display:none;background:none;border:none;color:var(--text3);cursor:pointer;padding:5px;border-radius:6px}
+    .burger{display:none;background:none;border:none;color:#666;cursor:pointer;padding:5px;border-radius:6px}
     .burger:hover{background:#181818;color:var(--text)}
-    .bar-title{font-size:15px;font-weight:600;color:#f0f0f0;letter-spacing:-.2px}
+    .bar-title{font-size:15px;font-weight:600;color:#ffffff;letter-spacing:-.2px}
     .bar-right{margin-left:auto}
     .toast{font-size:12px;padding:6px 12px;border-radius:7px}
     .toast.tok{background:#0a1f11;color:var(--green);border:1px solid #1a3a22}
@@ -497,29 +572,29 @@ interface User { id:number; email:string; name:string; }
     .empty{display:flex;align-items:center;justify-content:center;height:100%}
     .empty-box{text-align:center;max-width:420px}
     .empty-ico{width:60px;height:60px;background:#151515;border:1px solid var(--border);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;color:#2a2a2a}
-    .empty-box h2{font-size:20px;font-weight:600;color:#e8e8e8;margin-bottom:8px;letter-spacing:-.3px}
-    .empty-box p{color:#3a3a3a;line-height:1.7;margin-bottom:24px}
+    .empty-box h2{font-size:22px;font-weight:600;color:#f0f0f0;margin-bottom:8px;letter-spacing:-.3px}
+    .empty-box p{color:#555;line-height:1.7;margin-bottom:24px}
     .empty-acts{display:flex;gap:10px;justify-content:center}
     .btn-w{padding:10px 22px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
     .btn-w:hover{background:#ddd}
-    .btn-o{padding:10px 22px;background:none;color:var(--text2);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px}
+    .btn-o{padding:10px 22px;background:none;color:#aaa;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px}
     .btn-o:hover{border-color:var(--border2);color:var(--text)}
 
     /* ── KPIS ── */
     .dash{display:flex;flex-direction:column;gap:20px}
     .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden}
     .kpi{background:var(--bg);padding:18px 20px}
-    .kn{font-size:22px;font-weight:700;color:#f0f0f0;letter-spacing:-.5px;font-variant-numeric:tabular-nums;line-height:1}
+    .kn{font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-.5px;font-variant-numeric:tabular-nums;line-height:1}
     .kn.g{color:var(--green)} .kn.r{color:var(--red)}
-    .kl{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-top:5px;font-weight:600}
-    .ks{font-size:11px;color:var(--text3);margin-top:3px}
+    .kl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.6px;margin-top:5px;font-weight:600}
+    .ks{font-size:11px;color:#666;margin-top:3px}
 
     /* ── GRID ── */
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;overflow:hidden}
     .card.wide{grid-column:1/-1}
-    .ch{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
-    .tag{font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#1a1a1a;color:var(--text3);text-transform:none;letter-spacing:0}
+    .ch{font-size:11px;font-weight:600;color:#aaa;text-transform:uppercase;letter-spacing:.6px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+    .tag{font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#1a1a1a;color:#666;text-transform:none;letter-spacing:0}
     .tag.warn{background:#1f1208;color:#fb923c}
 
     /* ── PIE + LEGEND ── */
@@ -527,7 +602,7 @@ interface User { id:number; email:string; name:string; }
     .pie-legend{display:flex;flex-direction:column;gap:8px;flex:1}
     .pl-row{display:flex;align-items:center;gap:8px}
     .pl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .pl-name{font-size:12px;color:var(--text2);flex:1}
+    .pl-name{font-size:12px;color:#aaa;flex:1}
     .pl-val{font-size:12px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
 
     /* ── ROWS ── */
@@ -535,28 +610,28 @@ interface User { id:number; email:string; name:string; }
     .row-item{display:flex;align-items:center;gap:12px}
     .ri-l{flex:1;min-width:0}
     .ri-name{font-size:13px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .ri-sub{font-size:11px;color:var(--text3);margin-top:2px}
-    .ri-val{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;color:var(--text2)}
-    .ri-val.r{color:var(--red)} .ri-val.g{color:var(--green)} .ri-val.dim{color:var(--text3)}
+    .ri-sub{font-size:11px;color:#666;margin-top:2px}
+    .ri-val{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;color:#aaa}
+    .ri-val.r{color:var(--red)} .ri-val.g{color:var(--green)} .ri-val.dim{color:#666}
 
     /* ── CAT LIST ── */
     .cat-list{display:flex;flex-direction:column;gap:10px}
     .cat-row{display:flex;align-items:center;gap:10px}
     .cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .cat-name{font-size:12px;color:var(--text2);width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+    .cat-name{font-size:12px;color:#aaa;width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
     .cat-bar-wrap{flex:1;height:4px;background:#1a1a1a;border-radius:2px;overflow:hidden}
     .cat-bar{height:100%;border-radius:2px;transition:width .4s}
-    .cat-pct{font-size:11px;color:var(--text3);width:32px;text-align:right;flex-shrink:0}
-    .cat-amt{font-size:12px;color:var(--text2);width:76px;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0}
+    .cat-pct{font-size:11px;color:#666;width:32px;text-align:right;flex-shrink:0}
+    .cat-amt{font-size:12px;color:#aaa;width:76px;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0}
 
     /* ── CHART OVERRIDES (visibility) ── */
     .ngx-charts text{fill:#888!important;font-size:11px!important;font-family:-apple-system,'Inter','Segoe UI',sans-serif!important}
     .ngx-charts .gridline-path,.ngx-charts .refline-path{stroke:#1e1e1e!important}
     .ngx-charts .tick line{stroke:#1e1e1e!important}
-    .ngx-charts .data-label{fill:#c0c0c0!important;font-size:11px!important;font-weight:500!important}
+    .ngx-charts .data-label{fill:#d0d0d0!important;font-size:11px!important;font-weight:600!important}
     .ngx-charts .pie-label{fill:#bbb!important;font-size:11px!important}
     .ngx-charts .pie-label-line{stroke:#333!important}
-    .ngx-charts .x.axis .tick text,.ngx-charts .y.axis .tick text{fill:#666!important;font-size:11px!important}
+    .ngx-charts .x.axis .tick text,.ngx-charts .y.axis .tick text{fill:#888!important;font-size:11px!important}
     .ngx-charts .axis-label{fill:#555!important}
     .ngx-charts .tooltip-anchor{fill:#fff!important}
     .ngx-charts .bar:hover,.ngx-charts .cell:hover{opacity:.85}
@@ -565,48 +640,48 @@ interface User { id:number; email:string; name:string; }
 
     /* ── TXNS ── */
     .txn-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px}
-    .txn-ct{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.6px}
+    .txn-ct{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px}
     .txn-tools{display:flex;gap:8px;flex-wrap:wrap}
-    .ctl{background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:7px;padding:7px 10px;font-size:12px;outline:none;transition:all .15s}
+    .ctl{background:var(--surface);border:1px solid var(--border);color:#aaa;border-radius:7px;padding:7px 10px;font-size:12px;outline:none;transition:all .15s}
     .ctl:focus,.ctl:hover{border-color:var(--border2);color:var(--text)}
     .ctl-search{min-width:170px}
     .tbl-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
     .tbl{width:100%;border-collapse:collapse}
-    .tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #161616}
+    .tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #161616}
     .tbl td{padding:10px 14px;border-bottom:1px solid #111;vertical-align:middle}
     .tbl tr:last-child td{border-bottom:none}
     .tbl tr:hover td{background:#111}
-    .td-m{color:#ccc;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .td-m{color:#ddd;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .td-a{font-weight:600;font-variant-numeric:tabular-nums}
     .td-a.r{color:var(--red)} .td-a.g{color:var(--green)}
-    .td-d,.td-c{color:var(--text3);font-size:11px}
+    .td-d,.td-c{color:#666;font-size:11px}
     .td-st{font-size:11px} .td-st.g{color:var(--green)} .td-st.r{color:var(--red)}
     .pill{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
     .ps{background:#1f0e0e;color:var(--red)} .pr{background:#0e1f0e;color:var(--green)}
-    .load-more{text-align:center;padding:14px;color:var(--text3);cursor:pointer;font-size:12px;border-top:1px solid #131313}
-    .load-more:hover{color:var(--text2)}
+    .load-more{text-align:center;padding:14px;color:#666;cursor:pointer;font-size:12px;border-top:1px solid #131313}
+    .load-more:hover{color:#aaa}
 
     /* ── AI ── */
     .ai-wrap{display:flex;flex:1;overflow:hidden}
     .ai-side{width:210px;flex-shrink:0;border-right:1px solid var(--border);padding:16px 14px;overflow-y:auto;background:#0a0a0a;display:flex;flex-direction:column;gap:0}
     .as-sec{padding:10px 0;display:flex;flex-direction:column;gap:6px}
     .as-div{height:1px;background:var(--border)}
-    .as-lbl{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px}
+    .as-lbl{font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px}
     .as-status{display:flex;align-items:center;gap:6px;font-size:11px;padding:7px 9px;border-radius:7px}
     .as-status.on{background:#0a1a0f;color:var(--green);border:1px solid #0f2a18}
     .as-status.off{background:#1a0a0a;color:var(--red);border:1px solid #2a0f0f}
     .as-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
     .as-cmd{display:block;font-size:11px;color:#444;padding:5px 8px;background:#111;border-radius:5px;font-family:monospace}
     .as-idx{font-size:10px;color:var(--green);opacity:.6}
-    .as-btn{background:#141414;border:1px solid var(--border);color:var(--text3);border-radius:6px;padding:8px;font-size:11px;cursor:pointer;transition:all .15s}
-    .as-btn:hover:not(:disabled){background:#1a1a1a;color:var(--text2)}
+    .as-btn{background:#141414;border:1px solid var(--border);color:#666;border-radius:6px;padding:8px;font-size:11px;cursor:pointer;transition:all .15s}
+    .as-btn:hover:not(:disabled){background:#1a1a1a;color:#aaa}
     .as-btn:disabled{opacity:.3;cursor:default}
-    .as-q{background:none;border:none;color:var(--text3);font-size:11px;text-align:left;padding:5px 0;cursor:pointer;line-height:1.6;transition:color .15s}
-    .as-q:hover{color:var(--text2)}
+    .as-q{background:none;border:none;color:#666;font-size:11px;text-align:left;padding:5px 0;cursor:pointer;line-height:1.6;transition:color .15s}
+    .as-q:hover{color:#aaa}
     .ai-chat{flex:1;display:flex;flex-direction:column;min-width:0}
     .chat-msgs{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
     .chat-empty{margin:auto;text-align:center}
-    .ce-t{font-size:16px;font-weight:500;color:var(--text3);margin-bottom:6px}
+    .ce-t{font-size:16px;font-weight:500;color:#666;margin-bottom:6px}
     .ce-s{font-size:12px;color:#222}
     .msg-row{display:flex}
     .msg-row.user{justify-content:flex-end}
@@ -618,12 +693,12 @@ interface User { id:number; email:string; name:string; }
     .ld i:nth-child(2){animation-delay:.2s} .ld i:nth-child(3){animation-delay:.4s}
     @keyframes blink{0%,80%,100%{opacity:.15}40%{opacity:1}}
     .src{margin-top:8px;font-size:10px}
-    .src details summary{cursor:pointer;color:var(--text3)}
-    .src ul{margin:4px 0 0 10px;color:var(--text3);line-height:1.7}
+    .src details summary{cursor:pointer;color:#666}
+    .src ul{margin:4px 0 0 10px;color:#666;line-height:1.7}
     .chat-bar{border-top:1px solid var(--border);padding:14px 18px;display:flex;gap:8px;flex-shrink:0}
     .chat-in{flex:1;background:#111;border:1px solid var(--border);color:#e8e8e8;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;font-family:inherit;transition:border-color .15s}
     .chat-in:focus{border-color:var(--border2)}
-    .chat-send{width:40px;height:40px;background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+    .chat-send{width:40px;height:40px;background:var(--surface);border:1px solid var(--border);color:#aaa;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
     .chat-send:not(:disabled):hover{background:#222;color:var(--text);border-color:var(--border2)}
     .chat-send:disabled{opacity:.25;cursor:default}
 
@@ -633,21 +708,62 @@ interface User { id:number; email:string; name:string; }
     .td-cat { min-width:130px }
     .cat-cell { display:flex; align-items:center; gap:5px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .15s }
     .cat-cell:hover { background:#1a1a1a }
-    .cat-lbl { font-size:12px; color:var(--text2) }
+    .cat-lbl { font-size:12px; color:#aaa }
     .cat-lbl.custom-cat { color:#a78bfa }
-    .cat-edit-ico { font-size:10px; color:var(--text3); opacity:0; transition:opacity .15s }
+    .cat-edit-ico { font-size:10px; color:#666; opacity:0; transition:opacity .15s }
     .cat-cell:hover .cat-edit-ico { opacity:1 }
     .cat-edit-wrap { display:flex; align-items:center; gap:4px; flex-wrap:wrap }
     .cat-sel { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 6px; font-size:11px; outline:none; max-width:140px }
     .cat-custom-in { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 8px; font-size:11px; outline:none; width:120px }
     .cat-save { background:#0a2a14; border:1px solid #1a5a2a; color:var(--green); border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
-    .cat-cancel { background:#1a1a1a; border:1px solid var(--border); color:var(--text3); border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
+    .cat-cancel { background:#1a1a1a; border:1px solid var(--border); color:#666; border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
     .td-toggle { text-align:center; width:40px }
     .toggle-btn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 6px; border-radius:4px; transition:all .15s; line-height:1 }
     .toggle-btn.on { color:var(--green) }
-    .toggle-btn.off { color:var(--text3) }
+    .toggle-btn.off { color:#666 }
     .toggle-btn:hover { background:#1a1a1a }
-    .txn-excl { font-size:11px; color:var(--text3); font-weight:400 }
+    .txn-excl { font-size:11px; color:#666; font-weight:400 }
+
+    /* ── Received strip ── */
+    .recv-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+    .recv-kpi{background:#0f1a0f;padding:16px 20px}
+    .recv-val{font-size:20px;font-weight:700;color:#4ade80;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+    .recv-val.r{color:var(--red)} .recv-val.g{color:var(--green)}
+    .recv-lbl{font-size:10px;color:#2a5a2a;text-transform:uppercase;letter-spacing:.6px;margin-top:4px;font-weight:600}
+
+    /* ── Admin ── */
+    .admin-lnk{color:#f59e0b!important}
+    .admin-lnk.on{background:#1a1505!important;color:#fbbf24!important}
+    .sb-badge-red{margin-left:auto;font-size:10px;background:#4ade80;color:#0a0a0a;padding:1px 6px;border-radius:10px;font-weight:700}
+    .admin-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+    .admin-title{font-size:18px;font-weight:600;color:#f0f0f0}
+    .admin-refresh{background:#141414;border:1px solid var(--border);color:#aaa;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px}
+    .admin-refresh:hover{border-color:var(--border2);color:#e0e0e0}
+    .admin-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px}
+    .admin-kpi{background:var(--bg);padding:18px 20px}
+    .admin-kpi.online{background:#0a1a0a}
+    .ak-val{font-size:24px;font-weight:700;color:#f0f0f0;letter-spacing:-.5px}
+    .ak-val.g{color:#4ade80}
+    .ak-lbl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.6px;margin-top:4px;display:flex;align-items:center;gap:4px}
+    .online-dot{color:#4ade80;animation:pg 2s infinite}
+    .admin-section{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+    .admin-section-title{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;padding:14px 16px;border-bottom:1px solid var(--border)}
+    .admin-tbl-box{overflow-x:auto}
+    .admin-tbl{width:100%;border-collapse:collapse}
+    .admin-tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #161616}
+    .admin-tbl td{padding:10px 14px;border-bottom:1px solid #111;font-size:13px}
+    .admin-tbl tr:last-child td{border-bottom:none}
+    .online-row td{background:#0a1209}
+    .au-name{color:#e0e0e0;font-weight:500}
+    .au-email{color:#aaa}
+    .au-txn{color:#aaa;font-variant-numeric:tabular-nums}
+    .au-time{color:#666;font-size:11px}
+    .status-pill{padding:3px 9px;border-radius:10px;font-size:11px;font-weight:600}
+    .online-pill{background:#0a2a14;color:#4ade80;border:1px solid #1a5a2a}
+    .offline-pill{background:#1a1a1a;color:#666;border:1px solid var(--border)}
+    .role-pill{padding:3px 9px;border-radius:10px;font-size:11px;background:#1a1a1a;color:#666}
+    .admin-pill{background:#1a1505;color:#fbbf24}
+
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -666,6 +782,10 @@ export class AppComponent implements OnInit {
 
   // Auth
   currentUser: User | null = null;
+  isAdmin = false;
+  adminStats: any = null;
+  adminUsers: any[] = [];
+  adminLoading = false;
   authMode = 'login';
   authName = ''; authEmail = ''; authPassword = '';
   authError = ''; authLoading = false;
@@ -704,15 +824,10 @@ export class AppComponent implements OnInit {
   monthlyData:  any[] = [];
   weeklyData:   any[] = [];
   dowData:      any[] = [];
-  merchantData:        any[] = [];
-  receivedSourceData:  any[] = [];
-  monthlyComparedData: any[] = [];
-  receivedCatData:     any[] = [];
+  merchantData: any[] = [];
   cardW = 420;
   wideW = 860;
 
-  schemeCompare: any = { name:'compare', selectable:false, group:'Ordinal', domain:['#f87171','#4ade80'] };
-  schemeGreen:   any = { name:'green',   selectable:false, group:'Ordinal', domain:['#4ade80','#34d399','#6ee7b7','#a7f3d0','#d1fae5'] };
   scheme: any = { domain: ['#60a5fa','#f97316','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#94a3b8','#fb923c','#34d399'] };
 
   private catColors: Record<string,string> = {
@@ -740,6 +855,7 @@ export class AppComponent implements OnInit {
     const user  = localStorage.getItem('upi_user');
     if (saved && user) {
       this.currentUser = JSON.parse(user);
+      this.isAdmin = !!this.currentUser?.is_admin;
       this.init();
     }
     this.onResize();
@@ -772,6 +888,8 @@ export class AppComponent implements OnInit {
         localStorage.setItem('upi_token', res.token);
         localStorage.setItem('upi_user', JSON.stringify(res.user));
         this.currentUser = res.user;
+        this.isAdmin = !!res.user?.is_admin;
+        localStorage.setItem('upi_user', JSON.stringify(res.user));
         this.authLoading = false;
         this.init();
       },
@@ -849,6 +967,16 @@ export class AppComponent implements OnInit {
   }
 
   onDateFilter() { this.loadAnalytics(); }
+
+  reloadAnalyticsOnly() {
+    const p: any = {};
+    if (this.filterFrom) p['date_from'] = this.filterFrom;
+    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
+    this.http.get<any>(`${this.api}/analytics`, { params: p, headers: this.getHeaders() }).subscribe({
+      next: (a) => { this.analytics = a; this.buildCharts(); },
+      error: () => {}
+    });
+  }
 
   clearAllDates() {
     this.filterFrom = '';
@@ -932,22 +1060,6 @@ export class AppComponent implements OnInit {
     this.merchantData = (a.top_merchants||[]).slice(0,8).map((m:any)=>({
       name: m.name?.length>18 ? m.name.substring(0,18)+'…' : m.name, value: m.spent
     }));
-
-    // Received sources
-    this.receivedSourceData = (a.top_received_sources||[]).map((r:any)=>({
-      name: r.name?.length>18 ? r.name.substring(0,18)+'…' : r.name, value: r.received
-    }));
-
-    // Monthly compared (grouped bar: spent vs received)
-    this.monthlyComparedData = [
-      { name: 'Spent',    series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.spent}))    },
-      { name: 'Received', series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.received})) },
-    ];
-
-    // Received category breakdown
-    this.receivedCatData = Object.entries(a.received_category||{})
-      .map(([name,value])=>({name, value: value as number}))
-      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
 
     // Update scheme with category colors
     const catColors = this.pieData.map(d => d.color);
@@ -1034,28 +1146,50 @@ export class AppComponent implements OnInit {
     this.http.patch<any>(`${this.api}/transactions/${t.id}`,
       { category: cat }, { headers: this.getHeaders() }).subscribe({
       next: (r) => {
-        t.category = r.category;
+        t.category        = r.category;        // update in place
         t.custom_category = r.custom_category;
-        this.editingCat = null;
+        this.editingCat   = null;
         this.customCatInput = '';
         if (r.all_categories?.length) {
-          this.allSystemCats = r.all_categories;
-          this.allCats = r.all_categories;
+          this.allSystemCats = [...r.all_categories];
+          this.allCats       = [...r.all_categories];
         }
-        this.loadAnalytics();
-        this.showToast('Category updated to "' + cat + '"');
+        // Only reload charts, NOT the transaction list
+        this.reloadAnalyticsOnly();
+        this.showToast('Category set to "' + cat + '"');
       },
       error: () => this.showToast('Failed to update category', false)
     });
   }
 
   toggleIncluded(t: any) {
+    const newVal = !t.included;
+    t.included = newVal; // optimistic update immediately
     this.http.patch<any>(`${this.api}/transactions/${t.id}`,
-      { included: !t.included }, { headers: this.getHeaders() }).subscribe({
-      next: (r) => { t.included = r.included; this.loadAnalytics(); },
-      error: () => this.showToast('Failed to update', false)
+      { included: newVal }, { headers: this.getHeaders() }).subscribe({
+      next: (r) => {
+        t.included = r.included; // confirm from server
+        // Only reload analytics charts, NOT transactions list
+        this.reloadAnalyticsOnly();
+      },
+      error: () => {
+        t.included = !newVal; // revert on error
+        this.showToast('Failed to update', false);
+      }
     });
   }
 
-    private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
+    loadAdminData() {
+    this.adminLoading = true;
+    this.http.get<any>(`${this.api}/admin/stats`, { headers: this.getHeaders() }).subscribe({
+      next: (s) => { this.adminStats = s; },
+      error: () => {}
+    });
+    this.http.get<any>(`${this.api}/admin/users`, { headers: this.getHeaders() }).subscribe({
+      next: (r) => { this.adminUsers = r.users || []; this.adminLoading = false; },
+      error: () => { this.adminLoading = false; }
+    });
+  }
+
+  private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
 }
