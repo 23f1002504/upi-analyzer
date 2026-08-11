@@ -14,7 +14,7 @@ from datetime import datetime
 from .pdf_parser import UPIPDFParser
 from .analytics import AnalyticsEngine
 from .models import Transaction
-from .database import init_db, get_db, TransactionDB
+from .database import init_db, get_db, TransactionDB, SessionLocal
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
                    get_current_user, require_user, require_admin)
 from . import rag_service
