@@ -24,4 +24,4 @@ build/
 
 # Logs
 *.log
-backend/app/rag_service.py
+
