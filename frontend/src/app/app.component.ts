@@ -99,6 +99,14 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         {{ uploading ? 'Importing…' : 'Import CSV / PDF' }}
       </label>
       <button class="sb-clear-btn" *ngIf="totalStored" (click)="confirmClear()">Clear all data</button>
+      <button class="sb-logout secondary" (click)="showChangePw=!showChangePw">Change password</button>
+      <div class="pw-form" *ngIf="showChangePw">
+        <input class="pw-in" type="password" [(ngModel)]="pwCurrent" placeholder="Current password">
+        <input class="pw-in" type="password" [(ngModel)]="pwNew"     placeholder="New password">
+        <input class="pw-in" type="password" [(ngModel)]="pwConfirm" placeholder="Confirm new">
+        <div class="pw-msg" [class.ok]="pwOk" [class.err]="!pwOk" *ngIf="pwMsg">{{ pwMsg }}</div>
+        <button class="pw-save" (click)="changePassword()">Save</button>
+      </div>
       <button class="sb-logout" (click)="logout()">Sign out</button>
     </div>
   </aside>
@@ -424,7 +432,6 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         </button>
       </div>
 
-      <!-- Platform stats -->
       <div class="admin-kpis" *ngIf="adminStats">
         <div class="admin-kpi">
           <div class="ak-val">{{ adminStats.total_users }}</div>
@@ -446,18 +453,24 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
       <!-- Users table -->
       <div class="admin-section">
-        <div class="admin-section-title">Users</div>
+        <div class="admin-section-title">
+          Users
+          <span class="online-count" *ngIf="adminStats?.online_now">
+            {{ adminStats.online_now }} online
+          </span>
+        </div>
         <div class="admin-tbl-box">
           <table class="admin-tbl">
             <thead><tr>
               <th>Name</th><th>Email</th><th>Transactions</th>
-              <th>Last seen</th><th>Status</th><th>Role</th>
+              <th>Latest data</th><th>Last active</th><th>Status</th><th>Role</th><th></th>
             </tr></thead>
             <tbody>
               <tr *ngFor="let u of adminUsers" [class.online-row]="u.online">
                 <td class="au-name">{{ u.name }}</td>
                 <td class="au-email">{{ u.email }}</td>
                 <td class="au-txn">{{ u.txn_count }}</td>
+                <td class="au-time">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
                 <td class="au-time">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
                 <td>
                   <span class="status-pill" [class.online-pill]="u.online" [class.offline-pill]="!u.online">
@@ -465,7 +478,13 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
                   </span>
                 </td>
                 <td>
-                  <span class="role-pill" [class.admin-pill]="u.is_admin">{{ u.is_admin ? 'Admin' : 'User' }}</span>
+                  <span class="role-pill" [class.admin-pill]="u.is_admin">
+                    {{ u.is_admin ? 'Admin' : 'User' }}
+                  </span>
+                </td>
+                <td>
+                  <button class="au-del" *ngIf="!u.is_admin" (click)="deleteUser(u)"
+                    title="Delete user and all their data">✕</button>
                 </td>
               </tr>
             </tbody>
@@ -474,6 +493,9 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </div>
     </main>
 
+</div>
+</div>
+  `,
 </div>
 </div>
   `,
@@ -764,6 +786,19 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .role-pill{padding:3px 9px;border-radius:10px;font-size:11px;background:#1a1a1a;color:#666}
     .admin-pill{background:#1a1505;color:#fbbf24}
 
+
+    .sb-logout.secondary{color:#555;font-size:11px;background:none;border:none;cursor:pointer;text-align:left;padding:3px 0}
+    .pw-form{display:flex;flex-direction:column;gap:6px;padding:8px;background:#0d0d0d;border-radius:8px;border:1px solid var(--border)}
+    .pw-in{background:#111;border:1px solid var(--border);color:#e0e0e0;border-radius:6px;padding:7px 10px;font-size:12px;outline:none}
+    .pw-in:focus{border-color:var(--border2)}
+    .pw-msg{font-size:11px;padding:3px 0}
+    .pw-msg.ok{color:#4ade80} .pw-msg.err{color:#f87171}
+    .pw-save{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:6px;padding:7px;font-size:12px;font-weight:600;cursor:pointer}
+    .pw-save:hover{background:#ddd}
+    .online-count{margin-left:auto;font-size:11px;color:#4ade80;font-weight:400;text-transform:none;letter-spacing:0}
+    .au-del{background:none;border:none;color:#3a2020;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;transition:all .15s}
+    .au-del:hover{background:#1f0a0a;color:#f87171}
+    .admin-section-title{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center}
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -786,6 +821,9 @@ export class AppComponent implements OnInit {
   adminStats: any = null;
   adminUsers: any[] = [];
   adminLoading = false;
+  showChangePw = false;
+  pwCurrent = ''; pwNew = ''; pwConfirm = '';
+  pwMsg = ''; pwOk = false;
   authMode = 'login';
   authName = ''; authEmail = ''; authPassword = '';
   authError = ''; authLoading = false;
@@ -1197,7 +1235,38 @@ export class AppComponent implements OnInit {
     });
   }
 
-    loadAdminData() {
+    changePassword() {
+    if (this.pwNew !== this.pwConfirm) {
+      this.pwMsg = 'Passwords do not match'; this.pwOk = false; return;
+    }
+    if (this.pwNew.length < 6) {
+      this.pwMsg = 'Min 6 characters'; this.pwOk = false; return;
+    }
+    this.http.post<any>(`${this.api}/auth/change-password`,
+      { current_password: this.pwCurrent, new_password: this.pwNew },
+      { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.pwMsg = 'Password changed!'; this.pwOk = true;
+        this.pwCurrent = ''; this.pwNew = ''; this.pwConfirm = '';
+        setTimeout(() => { this.showChangePw = false; this.pwMsg = ''; }, 2000);
+      },
+      error: (e) => { this.pwMsg = e.error?.detail || 'Failed'; this.pwOk = false; }
+    });
+  }
+
+  deleteUser(u: any) {
+    if (!confirm(`Delete ${u.name} (${u.email}) and ALL their transactions? Cannot be undone.`)) return;
+    this.http.delete(`${this.api}/admin/users/${u.id}`, { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.adminUsers = this.adminUsers.filter(x => x.id !== u.id);
+        this.showToast(`${u.name} deleted`);
+        this.loadAdminData();
+      },
+      error: (e) => this.showToast(e.error?.detail || 'Delete failed', false)
+    });
+  }
+
+  loadAdminData() {
     this.adminLoading = true;
     this.http.get<any>(`${this.api}/admin/stats`, { headers: this.getHeaders() }).subscribe({
       next: (s) => { this.adminStats = s; },

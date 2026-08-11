@@ -16,7 +16,7 @@ from .analytics import AnalyticsEngine
 from .models import Transaction
 from .database import init_db, get_db, TransactionDB
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user, require_admin)
+                   get_current_user, require_user)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -29,6 +29,15 @@ _parser = UPIPDFParser()
 @app.on_event("startup")
 def startup():
     init_db()
+    # Seed admin user
+    db = SessionLocal()
+    try:
+        from .seed_admin import seed
+        seed(db)
+    except Exception as e:
+        print(f"Seed warning: {e}")
+    finally:
+        db.close()
 
 def _safe(obj):
     if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}
@@ -286,16 +295,31 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
         raise HTTPException(400, "Email already registered")
     user = UserDB(email=req.email, name=req.name, hashed_pw=hash_pw(req.password))
     db.add(user); db.commit(); db.refresh(user)
-    token = create_token({"sub": user.email, "uid": user.id, "is_admin": user.is_admin})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin}}
+    token = create_token({"sub": user.email, "uid": user.id})
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
 
 @app.post("/api/auth/login")
 def login(req: LoginReq, db: Session = Depends(get_db)):
     user = db.query(UserDB).filter(UserDB.email == req.email).first()
     if not user or not verify_pw(req.password, user.hashed_pw):
         raise HTTPException(401, "Invalid email or password")
-    token = create_token({"sub": user.email, "uid": user.id, "is_admin": user.is_admin})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin}}
+    token = create_token({"sub": user.email, "uid": user.id})
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
+
+
+
+class ChangePwReq(BaseModel):
+    current_password: str
+    new_password: str
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePwReq, db: Session = Depends(get_db),
+                    user = Depends(require_user)):
+    if not verify_pw(req.current_password, user.hashed_pw):
+        raise HTTPException(400, "Current password is incorrect")
+    user.hashed_pw = hash_pw(req.new_password)
+    db.commit()
+    return {"ok": True}
 
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
@@ -455,9 +479,9 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.category is not None:
         # Store as custom_category if different from auto-detected
         try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
+        t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
     return _row(t)
@@ -506,68 +530,29 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
 
 
 
-# ── ADMIN ─────────────────────────────────────────────────────────────────────
-
-@app.get("/api/admin/users")
-def admin_users(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    """Get all users with stats. Admin only."""
-    from sqlalchemy import func
-    users = db.query(UserDB).all()
-    result = []
-    now = datetime.utcnow()
-    for u in users:
-        txn_count = db.query(func.count(TransactionDB.id)).filter(
-            TransactionDB.user_id == str(u.id)
-        ).scalar() or 0
-        last = u.last_seen
-        online = last and (now - last).total_seconds() < 300  # online = seen in last 5 min
-        result.append({
-            "id":         u.id,
-            "email":      u.email,
-            "name":       u.name,
-            "is_admin":   u.is_admin,
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-            "last_seen":  last.isoformat() if last else None,
-            "online":     online,
-            "txn_count":  txn_count,
-        })
-    result.sort(key=lambda x: x["last_seen"] or "", reverse=True)
-    return {"users": result, "total": len(result),
-            "online_now": sum(1 for u in result if u["online"])}
-
-
-@app.post("/api/admin/make-admin")
-def make_admin(data: dict, db: Session = Depends(get_db), admin = Depends(require_admin)):
-    """Promote a user to admin."""
-    email = data.get("email")
-    user  = db.query(UserDB).filter(UserDB.email == email).first()
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(get_db),
+                      admin = Depends(require_admin)):
+    user = db.query(UserDB).filter(UserDB.id == user_id).first()
     if not user: raise HTTPException(404, "User not found")
-    user.is_admin = True
-    db.commit()
-    return {"ok": True, "email": email}
-
+    if user.email == admin.email: raise HTTPException(400, "Cannot delete yourself")
+    db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id)).delete()
+    db.delete(user); db.commit()
+    return {"ok": True}
 
 @app.get("/api/admin/stats")
 def admin_stats(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    """Platform-level stats."""
     from sqlalchemy import func
     from datetime import timedelta
     now = datetime.utcnow()
-    total_users   = db.query(func.count(UserDB.id)).scalar()
-    total_txns    = db.query(func.count(TransactionDB.id)).scalar()
-    online_cutoff = now - timedelta(minutes=5)
-    online_users  = db.query(func.count(UserDB.id)).filter(
-        UserDB.last_seen >= online_cutoff
-    ).scalar()
+    total_users  = db.query(func.count(UserDB.id)).scalar()
+    total_txns   = db.query(func.count(TransactionDB.id)).scalar()
+    online_users = db.query(func.count(UserDB.id)).filter(
+        UserDB.last_seen >= now - timedelta(minutes=5)).scalar()
     new_today = db.query(func.count(UserDB.id)).filter(
-        UserDB.created_at >= now.replace(hour=0, minute=0, second=0)
-    ).scalar()
-    return {
-        "total_users":   total_users,
-        "online_now":    online_users,
-        "new_today":     new_today,
-        "total_txns":    total_txns,
-    }
+        UserDB.created_at >= now.replace(hour=0,minute=0,second=0)).scalar()
+    return {"total_users":total_users,"online_now":online_users,
+            "new_today":new_today,"total_txns":total_txns}
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
