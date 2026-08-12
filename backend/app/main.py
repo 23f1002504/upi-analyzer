@@ -426,31 +426,31 @@ def rag_index(date_from:str=None, date_to:str=None,
 @app.post("/api/rag/query")
 def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
     if not req.question.strip(): raise HTTPException(400, "Empty")
-    # Compute stats from SQLite (always available, even if ChromaDB empty)
-    uid = user.id if user else None
+    uid  = user.id if user else None
     txns = _query(db, uid, all_rows=False)
     if not txns:
         return {"answer": "No transactions found. Upload a CSV first.", "sources": [], "provider": "none"}
-    from .models import Transaction
     from .analytics import AnalyticsEngine
-    try:
-        objs = [Transaction(date=t.date, time=t.time, amount=t.amount,
-                            transaction_type=t.transaction_type, merchant=t.merchant,
-                            category=getattr(t,'custom_category',None) or t.category,
-                            note=t.note, cashback=t.cashback) for t in txns]
-        a = AnalyticsEngine(objs).get_analytics()
-        external_stats = {
-            "total_transactions": a.get("transaction_count", 0) + a.get("received_count", 0),
-            "total_spent":    a.get("total_spent", 0),
-            "total_received": a.get("total_received", 0),
-            "total_cashback": a.get("total_cashback", 0),
-            "highest_expense": max((t.amount for t in objs if t.transaction_type=="sent"), default=0),
-            "category_breakdown": a.get("category_breakdown", {}),
-        }
-    except Exception as e:
-        print(f"Stats error: {e}")
-        external_stats = {}
-    return rag_service.query(req.question, external_stats=external_stats)
+    from .models import Transaction
+    objs = [Transaction(
+        date=t.date, time=t.time, amount=t.amount,
+        transaction_type=t.transaction_type,
+        merchant=t.merchant,
+        category=getattr(t, "custom_category", None) or t.category,
+        note=t.note, cashback=t.cashback
+    ) for t in txns]
+    a = AnalyticsEngine(objs).get_analytics()
+    stats = {
+        "total_transactions": len(txns),
+        "total_spent":        a.get("total_spent", 0),
+        "total_received":     a.get("total_received", 0),
+        "total_cashback":     a.get("total_cashback", 0),
+        "highest_expense":    max((t.amount for t in objs if t.transaction_type == "sent"), default=0),
+        "category_breakdown": a.get("category_breakdown", {}),
+    }
+    return rag_service.query(req.question, external_stats=stats)
+
+
 
 @app.get("/api/rag/status")
 def rag_status(db:Session=Depends(get_db)):

@@ -426,79 +426,96 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
         <!-- ADMIN TAB -->
     <main class="page" *ngIf="tab==='admin' && isAdmin">
-      <div class="admin-head">
-        <h2 class="admin-title">Admin Dashboard</h2>
-        <button class="admin-refresh" (click)="loadAdminData()" [disabled]="adminLoading">
-          {{ adminLoading ? 'Loading…' : '↻ Refresh' }}
+
+      <div class="adm-header">
+        <div>
+          <div class="adm-title">Admin Dashboard</div>
+          <div class="adm-sub">Platform overview · auto-refreshes every 30s</div>
+        </div>
+        <button class="adm-refresh" (click)="loadAdminData()" [disabled]="adminLoading">
+          {{ adminLoading ? '…' : '↻ Refresh' }}
         </button>
       </div>
 
-      <div class="admin-kpis" *ngIf="adminStats">
-        <div class="admin-kpi">
-          <div class="ak-val">{{ adminStats.total_users }}</div>
-          <div class="ak-lbl">Total users</div>
+      <!-- Stats cards -->
+      <div class="adm-kpis" *ngIf="adminStats">
+        <div class="adm-kpi">
+          <div class="adm-kpi-n">{{ adminStats.total_users }}</div>
+          <div class="adm-kpi-l">Total users</div>
         </div>
-        <div class="admin-kpi online">
-          <div class="ak-val g">{{ adminStats.online_now }}</div>
-          <div class="ak-lbl">Online now <span class="online-dot">●</span></div>
+        <div class="adm-kpi adm-kpi-green">
+          <div class="adm-kpi-n">{{ adminStats.online_now }}</div>
+          <div class="adm-kpi-l">● Online now</div>
         </div>
-        <div class="admin-kpi">
-          <div class="ak-val">{{ adminStats.new_today }}</div>
-          <div class="ak-lbl">New today</div>
+        <div class="adm-kpi">
+          <div class="adm-kpi-n">{{ adminStats.new_today }}</div>
+          <div class="adm-kpi-l">New today</div>
         </div>
-        <div class="admin-kpi">
-          <div class="ak-val">{{ adminStats.total_txns | number }}</div>
-          <div class="ak-lbl">Total transactions</div>
+        <div class="adm-kpi">
+          <div class="adm-kpi-n">{{ adminStats.total_txns | number }}</div>
+          <div class="adm-kpi-l">Total transactions</div>
         </div>
       </div>
 
       <!-- Users table -->
-      <div class="admin-section">
-        <div class="admin-section-title">
+      <div class="adm-card">
+        <div class="adm-card-head">
           Users
-          <span class="online-count" *ngIf="adminStats?.online_now">
+          <span class="adm-online-badge" *ngIf="adminStats?.online_now">
             {{ adminStats.online_now }} online
           </span>
+          <span class="adm-total-badge">{{ adminUsers.length }} total</span>
         </div>
-        <div class="admin-tbl-box">
-          <table class="admin-tbl">
-            <thead><tr>
-              <th>Name</th><th>Email</th><th>Transactions</th>
-              <th>Latest data</th><th>Last active</th><th>Status</th><th>Role</th><th></th>
-            </tr></thead>
-            <tbody>
-              <tr *ngFor="let u of adminUsers" [class.online-row]="u.online">
-                <td class="au-name">{{ u.name }}</td>
-                <td class="au-email">{{ u.email }}</td>
-                <td class="au-txn">{{ u.txn_count }}</td>
-                <td class="au-time">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
-                <td class="au-time">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
-                <td>
-                  <span class="status-pill" [class.online-pill]="u.online" [class.offline-pill]="!u.online">
-                    {{ u.online ? '● Online' : '○ Offline' }}
-                  </span>
-                </td>
-                <td>
-                  <span class="role-pill" [class.admin-pill]="u.is_admin">
-                    {{ u.is_admin ? 'Admin' : 'User' }}
-                  </span>
-                </td>
-                <td>
-                  <button class="au-del" *ngIf="!u.is_admin" (click)="deleteUser(u)"
-                    title="Delete user and all their data">✕</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div *ngIf="!adminUsers.length && !adminLoading" class="adm-empty">
+          No users yet — click Refresh
         </div>
+        <table class="adm-tbl" *ngIf="adminUsers.length">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Transactions</th>
+              <th>Last data</th>
+              <th>Last active</th>
+              <th>Role</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let u of adminUsers" [class.adm-row-online]="u.online">
+              <td>
+                <span class="adm-status" [class.adm-online]="u.online" [class.adm-offline]="!u.online">
+                  {{ u.online ? '●' : '○' }}
+                </span>
+              </td>
+              <td class="adm-name">{{ u.name }}</td>
+              <td class="adm-email">{{ u.email }}</td>
+              <td class="adm-num">{{ u.txn_count }}</td>
+              <td class="adm-dim">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
+              <td class="adm-dim">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
+              <td>
+                <span class="adm-role" [class.adm-role-admin]="u.is_admin">
+                  {{ u.is_admin ? 'Admin' : 'User' }}
+                </span>
+              </td>
+              <td>
+                <button class="adm-del" *ngIf="!u.is_admin"
+                  (click)="deleteUser(u)" title="Delete user">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+
     </main>
 
 </div>
 </div>
   `,
-
-  
+</div>
+</div>
+  `,
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -815,6 +832,45 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .ai-suggestions{display:flex;gap:6px;flex-wrap:wrap}
     .ait-sugg{background:#111;border:1px solid var(--border);color:#666;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
     .ait-sugg:hover{border-color:var(--border2);color:#bbb;background:#161616}
+
+    /* ── Admin Dashboard ── */
+    .adm-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px}
+    .adm-title{font-size:20px;font-weight:600;color:#f0f0f0;letter-spacing:-.3px}
+    .adm-sub{font-size:12px;color:#555;margin-top:3px}
+    .adm-refresh{background:#1a1a1a;border:1px solid #252525;color:#888;padding:8px 16px;border-radius:7px;cursor:pointer;font-size:13px;transition:all .15s}
+    .adm-refresh:hover:not(:disabled){background:#222;color:#e0e0e0}
+    .adm-refresh:disabled{opacity:.4;cursor:default}
+
+    .adm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:#252525;border:1px solid #252525;border-radius:12px;overflow:hidden;margin-bottom:20px}
+    .adm-kpi{background:#0f0f0f;padding:20px 22px}
+    .adm-kpi-green{background:#0a150a}
+    .adm-kpi-n{font-size:28px;font-weight:700;color:#ffffff;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+    .adm-kpi-green .adm-kpi-n{color:#4ade80}
+    .adm-kpi-l{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.6px;margin-top:5px;font-weight:600}
+
+    .adm-card{background:#111;border:1px solid #1e1e1e;border-radius:12px;overflow:hidden;margin-bottom:16px}
+    .adm-card-head{padding:14px 18px;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #161616;display:flex;align-items:center;gap:10px}
+    .adm-online-badge{font-size:11px;background:#0a2a14;color:#4ade80;padding:2px 9px;border-radius:10px;font-weight:600;text-transform:none;letter-spacing:0}
+    .adm-total-badge{font-size:11px;background:#1a1a1a;color:#555;padding:2px 9px;border-radius:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:auto}
+    .adm-empty{padding:32px;text-align:center;color:#333;font-size:13px}
+
+    .adm-tbl{width:100%;border-collapse:collapse}
+    .adm-tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#333;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #161616}
+    .adm-tbl td{padding:11px 14px;border-bottom:1px solid #111;vertical-align:middle}
+    .adm-tbl tr:last-child td{border-bottom:none}
+    .adm-row-online td{background:#0a120a}
+    .adm-status{font-size:14px;font-weight:700}
+    .adm-online{color:#4ade80}
+    .adm-offline{color:#2a2a2a}
+    .adm-name{font-size:13px;color:#e0e0e0;font-weight:500}
+    .adm-email{font-size:12px;color:#888}
+    .adm-num{font-size:13px;color:#aaa;font-variant-numeric:tabular-nums}
+    .adm-dim{font-size:11px;color:#444}
+    .adm-role{font-size:11px;padding:3px 9px;border-radius:5px;background:#1a1a1a;color:#555}
+    .adm-role-admin{background:#1a1505;color:#fbbf24}
+    .adm-del{background:none;border:none;color:#2a1515;cursor:pointer;font-size:14px;padding:3px 8px;border-radius:5px;transition:all .15s}
+    .adm-del:hover{background:#1f0a0a;color:#f87171}
+
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -998,7 +1054,11 @@ export class AppComponent implements OnInit {
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
   tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat'} as any)[this.tab]||''; }
-  go(t: string) { this.tab = t; this.sidebarOpen = false; }
+  go(t: string) {
+    if (t !== 'admin') clearTimeout((this as any)._adminTimer);
+    this.tab = t;
+    this.sidebarOpen = false;
+  }
   pct(v: number, total: number) { return total > 0 ? (v / total) * 100 : 0; }
   autoType(e: any) { return (e.target?.files?.[0]?.name||'').endsWith('.pdf') ? 'pdf' : 'csv'; }
   showToast(msg: string, ok = true) { this.toast={msg,ok}; setTimeout(()=>this.toast={msg:'',ok:true},4000); }
@@ -1174,7 +1234,7 @@ export class AppComponent implements OnInit {
   }
 
   downloadSample() {
-    const d='Name,Bank,Amount,Date,Status\nHumsafar EHT,SBI 9299,-3000.00,30 May 2026,SUCCESS\nNew_age,SBI XXXXXX9299,+860.00,31 May 2026,SUCCESS\nNEW NATIONAL MEDICAL,SBI 9299,-120.00,30 May 2026,SUCCESS';
+    const d='Name,Bank,Amount,Date,Status\nHumsafar EHT,SBI 9299,-3000.00,30 May 2026,SUCCESS\nNusrat Fatima,SBI XXXXXX9299,+860.00,31 May 2026,SUCCESS\nNEW NATIONAL MEDICAL,SBI 9299,-120.00,30 May 2026,SUCCESS';
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([d],{type:'text/csv'}));
     a.download='sample.csv'; a.click();
@@ -1297,6 +1357,11 @@ export class AppComponent implements OnInit {
 
   loadAdminData() {
     this.adminLoading = true;
+    // auto-refresh every 30s when on admin tab
+    if (this.tab === 'admin') {
+      clearTimeout((this as any)._adminTimer);
+      (this as any)._adminTimer = setTimeout(() => this.loadAdminData(), 30000);
+    }
     this.http.get<any>(`${this.api}/admin/stats`, { headers: this.getHeaders() }).subscribe({
       next: (s) => { this.adminStats = s; },
       error: () => {}
