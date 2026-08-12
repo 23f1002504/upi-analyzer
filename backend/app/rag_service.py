@@ -6,7 +6,7 @@ import pandas as pd
 
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
-GROQ_URL        = "https://api.groq.com/openai/v1/chat"
+GROQ_URL        = "https://api.groq.com/openai/v1"
 
 # CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 # CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
