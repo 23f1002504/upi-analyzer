@@ -513,9 +513,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 </div>
 </div>
   `,
-</div>
-</div>
-  `,
+
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
