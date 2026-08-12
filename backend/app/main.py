@@ -295,7 +295,8 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     if not user or not verify_pw(req.password, user.hashed_pw):
         raise HTTPException(401, "Invalid email or password")
     token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin" : user.is_admin
+    }}
 
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):

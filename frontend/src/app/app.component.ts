@@ -1074,6 +1074,32 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .din,.ctl,.pw-in,.cat-sel,.cat-custom-in,.chat-in{box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
     button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid rgba(96,165,250,.55);outline-offset:2px}
 
+    /* CHAT FIX: keep the composer visible and let only the message list scroll */
+    .main{min-height:0}
+    .ai-wrap{min-height:0!important;height:auto;overflow:hidden!important}
+    .ai-chat{min-height:0!important;height:auto;overflow:hidden}
+    .chat-msgs{
+      min-height:0!important;
+      height:auto;
+      flex:1 1 auto!important;
+      overflow-y:auto!important;
+      overflow-x:hidden!important;
+      overscroll-behavior:contain;
+      -webkit-overflow-scrolling:touch;
+    }
+    .chat-bar{
+      position:relative;
+      z-index:3;
+      flex:0 0 auto!important;
+      min-height:70px;
+    }
+    .chat-in{min-width:0}
+    @media(max-width:768px){
+      .ai-wrap,.ai-chat{min-height:0!important}
+      .chat-msgs{min-height:0!important}
+      .chat-bar{min-height:62px}
+    }
+
     /* Responsive */
     @media(max-width:1000px){
       .page{padding:22px}.grid{gap:14px}.card{padding:17px}.kpi{padding:16px}.kn{font-size:23px}
@@ -1592,5 +1618,10 @@ export class AppComponent implements OnInit {
     });
   }
 
-  private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
+  private scroll(){
+    setTimeout(()=>{
+      const el = this.chatWin?.nativeElement;
+      if(el) el.scrollTo({top:el.scrollHeight,behavior:'smooth'});
+    },50);
+  }
 }
