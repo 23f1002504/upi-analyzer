@@ -497,9 +497,8 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 </div>
 </div>
   `,
-</div>
-</div>
-  `,
+
+  
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -1175,7 +1174,7 @@ export class AppComponent implements OnInit {
   }
 
   downloadSample() {
-    const d='Name,Bank,Amount,Date,Status\nHumsafar EHT,SBI 9299,-3000.00,30 May 2026,SUCCESS\nNusrat Fatima,SBI XXXXXX9299,+860.00,31 May 2026,SUCCESS\nNEW NATIONAL MEDICAL,SBI 9299,-120.00,30 May 2026,SUCCESS';
+    const d='Name,Bank,Amount,Date,Status\nHumsafar EHT,SBI 9299,-3000.00,30 May 2026,SUCCESS\nNew_age,SBI XXXXXX9299,+860.00,31 May 2026,SUCCESS\nNEW NATIONAL MEDICAL,SBI 9299,-120.00,30 May 2026,SUCCESS';
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([d],{type:'text/csv'}));
     a.download='sample.csv'; a.click();

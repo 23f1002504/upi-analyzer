@@ -6,11 +6,11 @@ import pandas as pd
 
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
-GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_URL        = "https://api.groq.com/openai/v1/chat"
 
-CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
-CLAUDE_URL      = "https://api.anthropic.com/v1/messages"
+# CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+# CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
+# CLAUDE_URL      = "https://api.anthropic.com/v1/messages"
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "deepseek-r1:8b")
@@ -123,20 +123,20 @@ def _call_groq(prompt: str) -> Optional[str]:
         print(f"Groq error: {type(e).__name__}: {e}")
         return None
 
-def _call_claude(prompt: str) -> Optional[str]:
-    if not CLAUDE_API_KEY: return None
-    try:
-        resp = requests.post(CLAUDE_URL,
-            headers={"x-api-key": CLAUDE_API_KEY,
-                     "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": CLAUDE_MODEL, "max_tokens": 400,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=30)
-        resp.raise_for_status()
-        return resp.json()["content"][0]["text"]
-    except Exception as e:
-        print(f"Claude error: {e}"); return None
+# def _call_claude(prompt: str) -> Optional[str]:
+#     if not CLAUDE_API_KEY: return None
+#     try:
+#         resp = requests.post(CLAUDE_URL,
+#             headers={"x-api-key": CLAUDE_API_KEY,
+#                      "anthropic-version": "2023-06-01",
+#                      "content-type": "application/json"},
+#             json={"model": CLAUDE_MODEL, "max_tokens": 400,
+#                   "messages": [{"role": "user", "content": prompt}]},
+#             timeout=30)
+#         resp.raise_for_status()
+#         return resp.json()["content"][0]["text"]
+#     except Exception as e:
+#         print(f"Claude error: {e}"); return None
 
 def _call_ollama(prompt: str) -> Optional[str]:
     try:
@@ -148,11 +148,11 @@ def _call_ollama(prompt: str) -> Optional[str]:
     except: return None
 
 def _call_llm(prompt: str) -> str:
-    result = _call_groq(prompt) or _call_claude(prompt) or _call_ollama(prompt)
+    result = _call_groq(prompt)  or _call_ollama(prompt)
     if result: return result
     keys = []
     if not GROQ_API_KEY:   keys.append("GROQ_API_KEY")
-    if not CLAUDE_API_KEY: keys.append("ANTHROPIC_API_KEY")
+    # if not CLAUDE_API_KEY: keys.append("ANTHROPIC_API_KEY")
     if keys:
         return f"AI unavailable. Add {' or '.join(keys)} to Railway environment variables."
     return "AI service temporarily unavailable. Please try again."
@@ -187,17 +187,17 @@ Spending by category:
 
 Question: {safe_q}
 Answer:"""
-
-    provider = "groq" if GROQ_API_KEY else ("claude" if CLAUDE_API_KEY else "ollama")
+# if CLAUDE_API_KEY else
+    provider = "groq" if GROQ_API_KEY else ("claude"  "ollama")
     return {"answer": _call_llm(prompt), "sources": [], "stats": stats, "provider": provider}
 
 def ollama_status() -> dict:
     if GROQ_API_KEY:
         return {"running": True, "models": [GROQ_MODEL],
                 "active_model": GROQ_MODEL, "provider": "groq"}
-    if CLAUDE_API_KEY:
-        return {"running": True, "models": [CLAUDE_MODEL],
-                "active_model": CLAUDE_MODEL, "provider": "claude"}
+    # if CLAUDE_API_KEY:
+    #     return {"running": True, "models": [CLAUDE_MODEL],
+    #             "active_model": CLAUDE_MODEL, "provider": "claude"}
     try:
         resp   = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         models = [m["name"] for m in resp.json().get("models", [])]
