@@ -380,50 +380,51 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
     <!-- AI -->
     <div class="ai-wrap" *ngIf="tab==='ai'">
-      <div class="ai-side">
-        <div class="as-sec">
-          <div class="as-lbl">Ollama</div>
-          <div class="as-status" [class.on]="ollamaOk" [class.off]="!ollamaOk">
-            <span class="as-dot"></span>{{ ollamaOk ? (status?.active_model||'Online') : 'Offline' }}
+      <!-- Compact top bar for AI settings -->
+      <div class="ai-topbar">
+        <div class="ai-status-row">
+          <div class="ait-status" [class.on]="ollamaOk" [class.off]="!ollamaOk">
+            <span class="ait-dot"></span>
+            {{ ollamaOk ? (status?.provider==='groq' ? 'Groq AI' : status?.active_model||'Online') : 'AI Offline' }}
           </div>
-          <code class="as-cmd" *ngIf="!ollamaOk">ollama serve</code>
-          <div class="as-idx" *ngIf="indexedCount">{{ indexedCount }} docs indexed</div>
-          <button class="as-btn" (click)="reIndex()" [disabled]="indexing||!totalStored">{{ indexing?'Indexing…':'Re-index' }}</button>
+          <div class="ait-idx" *ngIf="indexedCount">{{ indexedCount }} docs</div>
+          <button class="ait-btn" (click)="reIndex()" [disabled]="indexing||!totalStored">
+            {{ indexing ? 'Indexing…' : 'Re-index' }}
+          </button>
         </div>
-        <div class="as-div"></div>
-        <div class="as-sec">
-          <div class="as-lbl">Suggestions</div>
-          <button class="as-q" *ngFor="let q of suggestions" (click)="ask(q)">{{ q }}</button>
+        <div class="ai-suggestions">
+          <button class="ait-sugg" *ngFor="let q of suggestions" (click)="ask(q)">{{ q }}</button>
         </div>
       </div>
+
+      <!-- Chat area -->
       <div class="ai-chat">
         <div class="chat-msgs" #chatWin>
           <div class="chat-empty" *ngIf="!messages.length">
             <div class="ce-t">AI Transaction Analyst</div>
-            <div class="ce-s">Import transactions then ask anything.</div>
+            <div class="ce-s">Import transactions then ask anything about your spending.</div>
+            <div class="ce-s" *ngIf="!ollamaOk" style="color:#f87171;margin-top:8px">
+              AI unavailable — check GROQ_API_KEY in Railway environment variables
+            </div>
           </div>
           <div *ngFor="let m of messages" class="msg-row" [class.user]="m.role==='user'">
             <div class="bub" [class.bu]="m.role==='user'" [class.bb]="m.role==='assistant'">
               <span *ngIf="m.loading" class="ld"><i></i><i></i><i></i></span>
               <span *ngIf="!m.loading" style="white-space:pre-wrap">{{ m.text }}</span>
-              <div *ngIf="m.sources?.length" class="src">
-                <details><summary>{{ m.sources!.length }} sources</summary>
-                  <ul><li *ngFor="let s of m.sources">{{ s }}</li></ul>
-                </details>
-              </div>
             </div>
           </div>
         </div>
         <div class="chat-bar">
-          <input class="chat-in" [(ngModel)]="question" (keydown.enter)="send()" [disabled]="chatLoading" placeholder="Ask about your spending…">
+          <input class="chat-in" [(ngModel)]="question" (keydown.enter)="send()"
+                 [disabled]="chatLoading" placeholder="Ask about your spending…">
           <button class="chat-send" (click)="send()" [disabled]="chatLoading||!question.trim()">
             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           </button>
         </div>
       </div>
     </div>
-  
-    <!-- ADMIN TAB -->
+
+        <!-- ADMIN TAB -->
     <main class="page" *ngIf="tab==='admin' && isAdmin">
       <div class="admin-head">
         <h2 class="admin-title">Admin Dashboard</h2>
@@ -496,8 +497,9 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 </div>
 </div>
   `,
-
-  
+</div>
+</div>
+  `,
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -798,6 +800,22 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .au-del{background:none;border:none;color:#3a2020;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;transition:all .15s}
     .au-del:hover{background:#1f0a0a;color:#f87171}
     .admin-section-title{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center}
+
+    /* AI tab - single column, no side panel */
+    .ai-wrap{display:flex;flex-direction:column;flex:1;overflow:hidden}
+    .ai-topbar{border-bottom:1px solid var(--border);padding:10px 20px;background:#0a0a0a;flex-shrink:0}
+    .ai-status-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+    .ait-status{display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:6px}
+    .ait-status.on{background:#0a1a0f;color:#4ade80;border:1px solid #1a4a2a}
+    .ait-status.off{background:#1a0a0a;color:#f87171;border:1px solid #4a1a1a}
+    .ait-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+    .ait-idx{font-size:11px;color:#555}
+    .ait-btn{background:#161616;border:1px solid var(--border);color:#888;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;transition:all .15s}
+    .ait-btn:hover:not(:disabled){background:#1e1e1e;color:#ccc}
+    .ait-btn:disabled{opacity:.3;cursor:default}
+    .ai-suggestions{display:flex;gap:6px;flex-wrap:wrap}
+    .ait-sugg{background:#111;border:1px solid var(--border);color:#666;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
+    .ait-sugg:hover{border-color:var(--border2);color:#bbb;background:#161616}
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -932,6 +950,10 @@ export class AppComponent implements OnInit {
         this.currentUser = res.user;
         this.isAdmin = !!res.user?.is_admin;
         localStorage.setItem('upi_user', JSON.stringify(res.user));
+        // Clear previous user data
+        this.transactions = []; this.filteredTxns = [];
+        this.messages = []; this.analytics = null;
+        this.totalStored = 0; this.tab = 'overview';
         this.authLoading = false;
         this.init();
       },
@@ -946,9 +968,18 @@ export class AppComponent implements OnInit {
     localStorage.removeItem('upi_token');
     localStorage.removeItem('upi_user');
     this.currentUser = null;
-    this.analytics = null;
+    this.isAdmin     = false;
+    this.analytics   = null;
     this.totalStored = 0;
     this.transactions = [];
+    this.filteredTxns = [];
+    this.messages     = [];
+    this.question     = '';
+    this.tab          = 'overview';
+    this.filterFrom   = '';
+    this.filterTo     = '';
+    this.pieData = []; this.monthlyData = []; this.merchantData = [];
+    this.receivedSourceData = []; this.monthlyComparedData = [];
   }
 
   init() {

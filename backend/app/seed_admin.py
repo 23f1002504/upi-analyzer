@@ -1,4 +1,7 @@
-
+"""
+seeds admin user and migrates DB on startup.
+Place at: E:\ProjectR\backend\app\seed_admin.py
+"""
 import os, hashlib, hmac
 from datetime import datetime
 

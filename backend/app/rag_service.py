@@ -4,10 +4,9 @@ import requests, re, os
 from typing import Optional
 import pandas as pd
 
-# ── Config ────────────────────────────────────────────────────────────────────
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama3-8b-8192")
-GROQ_URL        = "https://api.groq.com/openai/v1"
+GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
 CLAUDE_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
@@ -26,20 +25,6 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 _client: Optional[chromadb.PersistentClient] = None
 _collection = None
 
-
-def _get_collection():
-    global _client, _collection
-    if _collection is None:
-        _client = chromadb.PersistentClient(path=CHROMA_PATH)
-        _collection = _client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=ef,
-            metadata={"hnsw:space": "cosine"},
-        )
-    return _collection
-
-
-# ── Data masking ──────────────────────────────────────────────────────────────
 _MASKS = [
     (re.compile(r'\b[X*]{2,}\d{4}\b'),     '[ACCT]'),
     (re.compile(r'\b[\w.\-]+@[\w]+\b'),     '[UPI]'),
@@ -49,80 +34,78 @@ _MASKS = [
 ]
 
 def mask(text: str) -> str:
-    for pattern, replacement in _MASKS:
-        text = pattern.sub(replacement, text)
+    for p, r in _MASKS: text = p.sub(r, text)
     return text
 
+def _get_collection():
+    global _client, _collection
+    if _collection is None:
+        _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        _collection = _client.get_or_create_collection(
+            name=COLLECTION_NAME, embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _collection
 
-# ── Index — stores category-level data only, no merchant names ────────────────
 def index_transactions(transactions: list[dict]) -> dict:
     col = _get_collection()
     if col.count() > 0:
         col.delete(ids=col.get()["ids"])
-
     docs, ids, metas = [], [], []
     for i, t in enumerate(transactions):
         amount   = float(t.get("amount", 0))
         txn_type = str(t.get("transaction_type", "sent"))
         category = str(t.get("category", "Other"))
         cashback = float(t.get("cashback", 0) or 0)
-        month    = str(t.get("date", ""))[:7]  # YYYY-MM only
-
-        # Category-level doc — no merchant name, no exact date
+        month    = str(t.get("date", ""))[:7]
         direction = "outgoing" if txn_type == "sent" else "incoming"
         doc = f"Rs.{abs(amount):.0f} {direction} {category} in {month}."
-
-        docs.append(doc)
-        ids.append(f"txn_{i}")
+        docs.append(doc); ids.append(f"txn_{i}")
         metas.append({"amount": amount, "transaction_type": txn_type,
                       "category": category, "cashback": cashback, "month": month})
-
     col.add(documents=docs, ids=ids, metadatas=metas)
     return {"indexed": len(docs), "status": "ok"}
 
-
-# ── Local stats — computed in Python, never sent as raw data ──────────────────
-def _compute_stats() -> dict:
-    col = _get_collection()
-    if col.count() == 0: return {}
-    metas = col.get(include=["metadatas"])["metadatas"]
-    df    = pd.DataFrame(metas)
-    sent  = df[df["transaction_type"] == "sent"]["amount"].abs()
-    recv  = df[df["transaction_type"] == "received"]["amount"].abs()
-
-    cat_breakdown = {}
-    if not sent.empty and "category" in df.columns:
-        sent_df = df[df["transaction_type"] == "sent"]
-        cat_breakdown = {
-            k: round(float(v), 2)
-            for k, v in sent_df.groupby("category")["amount"]
-            .apply(lambda x: x.abs().sum()).sort_values(ascending=False).items()
-        }
-
-    recv_breakdown = {}
-    if not recv.empty and "category" in df.columns:
-        recv_df = df[df["transaction_type"] == "received"]
-        recv_breakdown = {
-            k: round(float(v), 2)
-            for k, v in recv_df.groupby("category")["amount"]
-            .apply(lambda x: x.abs().sum()).items()
-        }
-
-    return {
-        "total_transactions": len(metas),
-        "total_spent":        round(float(sent.sum()), 2),
-        "total_received":     round(float(recv.sum()), 2),
-        "total_cashback":     round(float(df["cashback"].sum()), 2),
-        "highest_expense":    round(float(sent.max()), 2) if not sent.empty else 0,
-        "category_breakdown": cat_breakdown,
-        "recv_breakdown":     recv_breakdown,
-    }
-
-
-# ── LLM calls ─────────────────────────────────────────────────────────────────
-def _call_groq(prompt: str) -> Optional[str]:
-    if not GROQ_API_KEY: return None
+def _compute_stats_from_chroma() -> dict:
     try:
+        col = _get_collection()
+        if col.count() == 0: return {}
+        metas = col.get(include=["metadatas"])["metadatas"]
+        df = pd.DataFrame(metas)
+        sent = df[df["transaction_type"]=="sent"]["amount"].abs()
+        recv = df[df["transaction_type"]=="received"]["amount"].abs()
+        cat = {}
+        if not sent.empty and "category" in df.columns:
+            cat = {k: round(float(v),2) for k,v in
+                   df[df["transaction_type"]=="sent"].groupby("category")["amount"]
+                   .apply(lambda x: x.abs().sum()).sort_values(ascending=False).items()}
+        return {
+            "total_transactions": len(metas),
+            "total_spent":    round(float(sent.sum()),2),
+            "total_received": round(float(recv.sum()),2),
+            "total_cashback": round(float(df["cashback"].sum()),2),
+            "highest_expense": round(float(sent.max()),2) if not sent.empty else 0,
+            "category_breakdown": cat,
+        }
+    except Exception as e:
+        print(f"Chroma stats error: {e}"); return {}
+
+# Accept external stats from SQLite (passed from main.py)
+_external_stats: dict = {}
+
+def set_stats(stats: dict):
+    global _external_stats
+    _external_stats = stats
+
+def _get_stats() -> dict:
+    return _external_stats or _compute_stats_from_chroma()
+
+def _call_groq(prompt: str) -> Optional[str]:
+    if not GROQ_API_KEY:
+        print("GROQ_API_KEY not set")
+        return None
+    try:
+        print(f"Calling Groq with model {GROQ_MODEL}...")
         resp = requests.post(
             GROQ_URL,
             headers={"Authorization": f"Bearer {GROQ_API_KEY}",
@@ -133,92 +116,71 @@ def _call_groq(prompt: str) -> Optional[str]:
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        result = resp.json()["choices"][0]["message"]["content"]
+        print(f"Groq response received: {len(result)} chars")
+        return result
     except Exception as e:
-        import traceback
-        print(f"Groq error: {e}")
-        print(traceback.format_exc())
+        print(f"Groq error: {type(e).__name__}: {e}")
         return None
-
 
 def _call_claude(prompt: str) -> Optional[str]:
     if not CLAUDE_API_KEY: return None
     try:
-        resp = requests.post(
-            CLAUDE_URL,
+        resp = requests.post(CLAUDE_URL,
             headers={"x-api-key": CLAUDE_API_KEY,
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
             json={"model": CLAUDE_MODEL, "max_tokens": 400,
                   "messages": [{"role": "user", "content": prompt}]},
-            timeout=30,
-        )
+            timeout=30)
         resp.raise_for_status()
         return resp.json()["content"][0]["text"]
     except Exception as e:
         print(f"Claude error: {e}"); return None
 
-
 def _call_ollama(prompt: str) -> Optional[str]:
     try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
+        resp = requests.post(f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=30,  # shorter timeout on cloud
-        )
+            timeout=30)
         resp.raise_for_status()
-        text = resp.json().get("response", "")
-        return text if text else None
-    except Exception:
-        return None  # Ollama not available — fall through
-
+        return resp.json().get("response") or None
+    except: return None
 
 def _call_llm(prompt: str) -> str:
-    result = _call_groq(prompt)
+    result = _call_groq(prompt) or _call_claude(prompt) or _call_ollama(prompt)
     if result: return result
-    result = _call_claude(prompt)
-    if result: return result
-    result = _call_ollama(prompt)
-    if result: return result
-    return "AI service unavailable. Check GROQ_API_KEY in Railway environment variables."
+    keys = []
+    if not GROQ_API_KEY:   keys.append("GROQ_API_KEY")
+    if not CLAUDE_API_KEY: keys.append("ANTHROPIC_API_KEY")
+    if keys:
+        return f"AI unavailable. Add {' or '.join(keys)} to Railway environment variables."
+    return "AI service temporarily unavailable. Please try again."
 
+def query(user_question: str, external_stats: dict = None) -> dict:
+    stats = external_stats or _get_stats()
 
-# ── Query — sends ONLY aggregated category totals to cloud LLM ───────────────
-def query(user_question: str) -> dict:
-    """
-    Privacy architecture:
-      Raw transactions → stays in SQLite (your server)
-      Individual txns  → stays in ChromaDB (your server)
-      Sent to LLM      → ONLY category totals (no merchants, no IDs, no dates)
-    """
-    col = _get_collection()
-    if col.count() == 0:
-        return {"answer": "No transactions indexed yet. Please upload a CSV and click Re-index.", "sources": []}
-
-    stats = _compute_stats()
     if not stats:
-        return {"answer": "No data available.", "sources": []}
+        return {"answer": "No transaction data found. Upload a CSV and click Re-index.", "sources": []}
 
-    total_spent = stats["total_spent"]
-    cat = stats["category_breakdown"]
+    total_spent = stats.get("total_spent", 0)
+    cat = stats.get("category_breakdown", {})
 
-    # Build anonymized aggregate summary
     cat_lines = "\n".join(
         f"  {name}: Rs.{amt} ({round(amt/max(total_spent,1)*100)}%)"
         for name, amt in list(cat.items())[:8]
-    )
+    ) or "  No category data"
 
     safe_q = mask(user_question)
 
-    prompt = f"""You are a personal finance analyst. Analyze this spending summary and answer the question.
-Use Rs. for amounts. Be practical and specific. 3-4 sentences max.
+    prompt = f"""You are a personal finance analyst. Analyze spending and answer concisely (3-4 sentences max). Use Rs. for amounts.
 
-SPENDING SUMMARY (anonymized aggregates only):
-- Total spent:    Rs.{stats['total_spent']}
-- Total received: Rs.{stats['total_received']}
-- Net flow:       Rs.{round(stats['total_received'] - stats['total_spent'], 2)}
-- Transactions:   {stats['total_transactions']}
-- Largest single: Rs.{stats['highest_expense']}
+SPENDING SUMMARY (anonymized):
+- Total spent:    Rs.{stats.get('total_spent',0)}
+- Total received: Rs.{stats.get('total_received',0)}
+- Net flow:       Rs.{round(stats.get('total_received',0) - stats.get('total_spent',0), 2)}
+- Transactions:   {stats.get('total_transactions',0)}
+- Largest single: Rs.{stats.get('highest_expense',0)}
 
 Spending by category:
 {cat_lines}
@@ -227,18 +189,8 @@ Question: {safe_q}
 Answer:"""
 
     provider = "groq" if GROQ_API_KEY else ("claude" if CLAUDE_API_KEY else "ollama")
-    answer   = _call_llm(prompt)
+    return {"answer": _call_llm(prompt), "sources": [], "stats": stats, "provider": provider}
 
-    return {
-        "answer":   answer,
-        "sources":  [],
-        "stats":    stats,
-        "provider": provider,
-        "privacy":  "Only category totals sent to AI. No merchants, IDs, or individual transactions."
-    }
-
-
-# ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
     if GROQ_API_KEY:
         return {"running": True, "models": [GROQ_MODEL],

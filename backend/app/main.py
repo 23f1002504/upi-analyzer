@@ -14,9 +14,9 @@ from datetime import datetime
 from .pdf_parser import UPIPDFParser
 from .analytics import AnalyticsEngine
 from .models import Transaction
-from .database import init_db, get_db, TransactionDB, SessionLocal
+from .database import init_db, get_db, TransactionDB
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user, require_admin)
+                   get_current_user, require_user)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -29,15 +29,6 @@ _parser = UPIPDFParser()
 @app.on_event("startup")
 def startup():
     init_db()
-    # Seed admin user
-    db = SessionLocal()
-    try:
-        from .seed_admin import seed
-        seed(db)
-    except Exception as e:
-        print(f"Seed warning: {e}")
-    finally:
-        db.close()
 
 def _safe(obj):
     if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}
@@ -306,21 +297,6 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     token = create_token({"sub": user.email, "uid": user.id})
     return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
 
-
-
-class ChangePwReq(BaseModel):
-    current_password: str
-    new_password: str
-
-@app.post("/api/auth/change-password")
-def change_password(req: ChangePwReq, db: Session = Depends(get_db),
-                    user = Depends(require_user)):
-    if not verify_pw(req.current_password, user.hashed_pw):
-        raise HTTPException(400, "Current password is incorrect")
-    user.hashed_pw = hash_pw(req.new_password)
-    db.commit()
-    return {"ok": True}
-
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
     return {"id": user.id, "email": user.email, "name": user.name}
@@ -448,9 +424,33 @@ def rag_index(date_from:str=None, date_to:str=None,
     return rag_service.index_transactions([_row(t) for t in txns])
 
 @app.post("/api/rag/query")
-def rag_query(req: RAGReq):
+def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
     if not req.question.strip(): raise HTTPException(400, "Empty")
-    return rag_service.query(req.question)
+    # Compute stats from SQLite (always available, even if ChromaDB empty)
+    uid = user.id if user else None
+    txns = _query(db, uid, all_rows=False)
+    if not txns:
+        return {"answer": "No transactions found. Upload a CSV first.", "sources": [], "provider": "none"}
+    from .models import Transaction
+    from .analytics import AnalyticsEngine
+    try:
+        objs = [Transaction(date=t.date, time=t.time, amount=t.amount,
+                            transaction_type=t.transaction_type, merchant=t.merchant,
+                            category=getattr(t,'custom_category',None) or t.category,
+                            note=t.note, cashback=t.cashback) for t in txns]
+        a = AnalyticsEngine(objs).get_analytics()
+        external_stats = {
+            "total_transactions": a.get("transaction_count", 0) + a.get("received_count", 0),
+            "total_spent":    a.get("total_spent", 0),
+            "total_received": a.get("total_received", 0),
+            "total_cashback": a.get("total_cashback", 0),
+            "highest_expense": max((t.amount for t in objs if t.transaction_type=="sent"), default=0),
+            "category_breakdown": a.get("category_breakdown", {}),
+        }
+    except Exception as e:
+        print(f"Stats error: {e}")
+        external_stats = {}
+    return rag_service.query(req.question, external_stats=external_stats)
 
 @app.get("/api/rag/status")
 def rag_status(db:Session=Depends(get_db)):
@@ -479,9 +479,9 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.category is not None:
         # Store as custom_category if different from auto-detected
         try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
+        t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
     return _row(t)
@@ -527,32 +527,6 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
         TransactionDB.user_id == (str(uid) if uid else None)
     ).count()
     return {"inserted": ins, "skipped": skp, "total_stored": total}
-
-
-
-@app.delete("/api/admin/users/{user_id}")
-def admin_delete_user(user_id: int, db: Session = Depends(get_db),
-                      admin = Depends(require_admin)):
-    user = db.query(UserDB).filter(UserDB.id == user_id).first()
-    if not user: raise HTTPException(404, "User not found")
-    if user.email == admin.email: raise HTTPException(400, "Cannot delete yourself")
-    db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id)).delete()
-    db.delete(user); db.commit()
-    return {"ok": True}
-
-@app.get("/api/admin/stats")
-def admin_stats(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    from sqlalchemy import func
-    from datetime import timedelta
-    now = datetime.utcnow()
-    total_users  = db.query(func.count(UserDB.id)).scalar()
-    total_txns   = db.query(func.count(TransactionDB.id)).scalar()
-    online_users = db.query(func.count(UserDB.id)).filter(
-        UserDB.last_seen >= now - timedelta(minutes=5)).scalar()
-    new_today = db.query(func.count(UserDB.id)).filter(
-        UserDB.created_at >= now.replace(hour=0,minute=0,second=0)).scalar()
-    return {"total_users":total_users,"online_now":online_users,
-            "new_today":new_today,"total_txns":total_txns}
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
