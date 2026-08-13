@@ -1139,6 +1139,7 @@ export class AppComponent implements OnInit {
   adminStats: any = null;
   adminUsers: any[] = [];
   adminLoading = false;
+  _adminTimer: any = null;
   showChangePw = false;
   pwCurrent = ''; pwNew = ''; pwConfirm = '';
   pwMsg = ''; pwOk = false;
@@ -1304,6 +1305,9 @@ export class AppComponent implements OnInit {
     if (t !== 'admin') clearTimeout((this as any)._adminTimer);
     this.tab = t;
     this.sidebarOpen = false;
+    if (t === 'admin') {
+      this.loadAdminData();
+    }
   }
   pct(v: number, total: number) { return total > 0 ? (v / total) * 100 : 0; }
   autoType(e: any) { return (e.target?.files?.[0]?.name||'').endsWith('.pdf') ? 'pdf' : 'csv'; }
@@ -1618,10 +1622,5 @@ export class AppComponent implements OnInit {
     });
   }
 
-  private scroll(){
-    setTimeout(()=>{
-      const el = this.chatWin?.nativeElement;
-      if(el) el.scrollTo({top:el.scrollHeight,behavior:'smooth'});
-    },50);
-  }
+  private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
 }

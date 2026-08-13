@@ -16,7 +16,7 @@ from .analytics import AnalyticsEngine
 from .models import Transaction
 from .database import init_db, get_db, TransactionDB
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user)
+                   get_current_user, require_user, require_admin)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -287,7 +287,7 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
     user = UserDB(email=req.email, name=req.name, hashed_pw=hash_pw(req.password))
     db.add(user); db.commit(); db.refresh(user)
     token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
 
 @app.post("/api/auth/login")
 def login(req: LoginReq, db: Session = Depends(get_db)):
@@ -295,8 +295,7 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     if not user or not verify_pw(req.password, user.hashed_pw):
         raise HTTPException(401, "Invalid email or password")
     token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin" : user.is_admin
-    }}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
 
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
@@ -528,6 +527,92 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
         TransactionDB.user_id == (str(uid) if uid else None)
     ).count()
     return {"inserted": ins, "skipped": skp, "total_stored": total}
+
+
+
+# ── CHANGE PASSWORD ───────────────────────────────────────────────────────────
+
+class ChangePwReq(BaseModel):
+    current_password: str
+    new_password: str
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePwReq, db: Session = Depends(get_db),
+                    user = Depends(require_user)):
+    if not verify_pw(req.current_password, user.hashed_pw):
+        raise HTTPException(400, "Current password incorrect")
+    user.hashed_pw = hash_pw(req.new_password)
+    db.commit()
+    return {"ok": True}
+
+
+# ── ADMIN ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/stats")
+def admin_stats(db: Session = Depends(get_db), admin = Depends(require_admin)):
+    from sqlalchemy import func
+    from datetime import timedelta
+    now = datetime.utcnow()
+    total_users  = db.query(func.count(UserDB.id)).scalar() or 0
+    total_txns   = db.query(func.count(TransactionDB.id)).scalar() or 0
+    online_users = db.query(func.count(UserDB.id)).filter(
+        UserDB.last_seen >= now - timedelta(minutes=5)
+    ).scalar() or 0
+    new_today = db.query(func.count(UserDB.id)).filter(
+        UserDB.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ).scalar() or 0
+    return {
+        "total_users":  total_users,
+        "online_now":   online_users,
+        "new_today":    new_today,
+        "total_txns":   total_txns,
+    }
+
+
+@app.get("/api/admin/users")
+def admin_users(db: Session = Depends(get_db), admin = Depends(require_admin)):
+    from sqlalchemy import func
+    from datetime import timedelta
+    now   = datetime.utcnow()
+    users = db.query(UserDB).all()
+    result = []
+    for u in users:
+        txn_count = db.query(func.count(TransactionDB.id)).filter(
+            TransactionDB.user_id == str(u.id)
+        ).scalar() or 0
+        latest = db.query(TransactionDB.date).filter(
+            TransactionDB.user_id == str(u.id)
+        ).order_by(TransactionDB.date.desc()).first()
+        last     = getattr(u, "last_seen", None)
+        online   = bool(last and (now - last).total_seconds() < 300)
+        result.append({
+            "id":              u.id,
+            "email":           u.email,
+            "name":            u.name,
+            "is_admin":        bool(getattr(u, "is_admin", False)),
+            "created_at":      u.created_at.isoformat() if u.created_at else None,
+            "last_seen":       last.isoformat() if last else None,
+            "online":          online,
+            "txn_count":       txn_count,
+            "latest_txn_date": latest[0].isoformat() if latest else None,
+        })
+    result.sort(key=lambda x: (x["online"], x["last_seen"] or ""), reverse=True)
+    return {"users": result, "total": len(result),
+            "online_now": sum(1 for u in result if u["online"])}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(get_db),
+                      admin = Depends(require_admin)):
+    user = db.query(UserDB).filter(UserDB.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.email == admin.email:
+        raise HTTPException(400, "Cannot delete yourself")
+    db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id)).delete()
+    db.delete(user)
+    db.commit()
+    return {"ok": True}
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
