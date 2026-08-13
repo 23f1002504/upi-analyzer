@@ -421,7 +421,7 @@ def rag_index(date_from:str=None, date_to:str=None,
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to)
     if not txns: raise HTTPException(400, "No transactions")
-    return rag_service.index_transactions([_row(t) for t in txns], user_id=uid)
+    return rag_service.index_transactions([_row(t) for t in txns])
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
@@ -460,35 +460,16 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_cur
         "largest_transactions": a.get("largest_transactions", []),
         "date_range":          date_range,
     }
-    return rag_service.query(req.question, external_stats=stats, user_id=uid)
+    return rag_service.query(req.question, external_stats=stats)
 
 
 
 @app.get("/api/rag/status")
-def rag_status(db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    txns = _query(db, uid, all_rows=True)
-
-    chroma = rag_service.chromadb_status()
-
-    # Do not expose the global Chroma collection count. That could reveal
-    # information about other users' indexed records.
-    user_indexed_count = 0
+def rag_status(db:Session=Depends(get_db)):
     col = rag_service._get_collection()
-    if col is not None and uid is not None:
-        try:
-            user_indexed_count = len(
-                col.get(where={"user_id": str(uid)}, include=[])["ids"]
-            )
-        except Exception:
-            user_indexed_count = 0
-
-    return {
-        "ollama": rag_service.ollama_status(),
-        "chromadb": chroma,
-        "indexed_count": user_indexed_count,
-        "transactions_loaded": len(txns),
-    }
+    return {"ollama": rag_service.ollama_status(),
+            "indexed_count": col.count(),
+            "transactions_loaded": db.query(TransactionDB).count()}
 
 
 
