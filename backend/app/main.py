@@ -440,13 +440,25 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_cur
         note=t.note, cashback=t.cashback
     ) for t in txns]
     a = AnalyticsEngine(objs).get_analytics()
+    # Date range for context
+    dates = sorted([t.date for t in txns])
+    date_range = ""
+    if dates:
+        date_range = f"{dates[0].strftime('%d %b %Y')} to {dates[-1].strftime('%d %b %Y')}"
+
     stats = {
-        "total_transactions": len(txns),
-        "total_spent":        a.get("total_spent", 0),
-        "total_received":     a.get("total_received", 0),
-        "total_cashback":     a.get("total_cashback", 0),
-        "highest_expense":    max((t.amount for t in objs if t.transaction_type == "sent"), default=0),
-        "category_breakdown": a.get("category_breakdown", {}),
+        "total_transactions":  len(txns),
+        "total_spent":         a.get("total_spent", 0),
+        "total_received":      a.get("total_received", 0),
+        "total_cashback":      a.get("total_cashback", 0),
+        "highest_expense":     max((t.amount for t in objs if t.transaction_type == "sent"), default=0),
+        "category_breakdown":  a.get("category_breakdown", {}),
+        "top_merchants":       a.get("top_merchants", []),
+        "top_received_sources": a.get("top_received_sources", []),
+        "monthly_trend":       a.get("monthly_trend", {}),
+        "recurring_merchants": a.get("recurring_merchants", []),
+        "largest_transactions": a.get("largest_transactions", []),
+        "date_range":          date_range,
     }
     return rag_service.query(req.question, external_stats=stats)
 

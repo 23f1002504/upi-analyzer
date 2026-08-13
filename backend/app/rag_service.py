@@ -133,27 +133,74 @@ def query(user_question: str, external_stats: dict = None) -> dict:
             "sources": [], "provider": "none"
         }
 
-    total_spent = stats.get("total_spent", 0)
-    cat         = stats.get("category_breakdown", {})
+    total_spent    = stats.get("total_spent", 0)
+    total_received = stats.get("total_received", 0)
+    cat            = stats.get("category_breakdown", {})
+    top_merchants  = stats.get("top_merchants", [])       # list of {name, spent, count}
+    top_received   = stats.get("top_received_sources", []) # list of {name, received}
+    date_range     = stats.get("date_range", "")
+    monthly        = stats.get("monthly_trend", {})
+    recurring      = stats.get("recurring_merchants", [])
+    largest        = stats.get("largest_transactions", [])
 
+    # Category breakdown
     cat_lines = "\n".join(
         f"  {name}: Rs.{amt} ({round(amt / max(total_spent, 1) * 100)}%)"
-        for name, amt in list(cat.items())[:8]
-    ) or "  No category data"
+        for name, amt in list(cat.items())[:10]
+    ) or "  No data"
 
-    prompt = f"""You are a personal finance analyst. Answer in 3-4 sentences max. Use Rs.
+    # Top merchants (merchant names + amounts - useful for analysis)
+    merchant_lines = "\n".join(
+        f"  {m['name']}: Rs.{m['spent']} ({m['count']} times)"
+        for m in top_merchants[:8]
+    ) if top_merchants else "  No data"
 
-SPENDING SUMMARY:
-- Total spent:    Rs.{stats.get('total_spent', 0)}
-- Total received: Rs.{stats.get('total_received', 0)}
-- Net flow:       Rs.{round(stats.get('total_received', 0) - stats.get('total_spent', 0), 2)}
-- Transactions:   {stats.get('total_transactions', 0)}
-- Largest single: Rs.{stats.get('highest_expense', 0)}
+    # Monthly trend
+    monthly_lines = "\n".join(
+        f"  {month}: Rs.{amt}"
+        for month, amt in list(monthly.items())[-6:]  # last 6 months
+    ) if monthly else "  No data"
 
-By category:
+    # Recurring payments
+    recurring_lines = "\n".join(
+        f"  {r['merchant']}: Rs.{r['avg']:.0f} avg × {r['count']} times = Rs.{r['total']:.0f} total"
+        for r in recurring[:5]
+    ) if recurring else "  None"
+
+    # Largest payments
+    largest_lines = "\n".join(
+        f"  {t['merchant']}: Rs.{t['amount']} on {t['date']} ({t['category']})"
+        for t in largest[:5]
+    ) if largest else "  None"
+
+    # Mask only truly sensitive fields from question (not merchant names)
+    safe_q = _mask_sensitive_only(user_question)
+
+    prompt = f"""You are a personal finance analyst. Give specific, actionable answers using the data below. Use Rs. for amounts. Be concise (4-5 sentences max).
+
+TRANSACTION SUMMARY:
+Period: {date_range or "All time"}
+Total spent:    Rs.{total_spent}
+Total received: Rs.{total_received}
+Net flow:       Rs.{round(total_received - total_spent, 2)}
+Transactions:   {stats.get('total_transactions', 0)}
+
+SPENDING BY CATEGORY:
 {cat_lines}
 
-Question: {_mask(user_question)}
+TOP MERCHANTS (where money went):
+{merchant_lines}
+
+MONTHLY SPENDING TREND:
+{monthly_lines}
+
+RECURRING PAYMENTS:
+{recurring_lines}
+
+LARGEST PAYMENTS:
+{largest_lines}
+
+Question: {safe_q}
 Answer:"""
 
     provider = "groq" if GROQ_API_KEY else "ollama"
@@ -162,6 +209,20 @@ Answer:"""
         "sources":  [],
         "provider": provider,
     }
+
+
+def _mask_sensitive_only(text: str) -> str:
+    """Mask only account numbers, UPI IDs, phone numbers. Keep merchant names and dates."""
+    patterns = [
+        (re.compile(r'[X*]{2,}\d{4}'),      '[ACCT]'),
+        (re.compile(r'[\w.\-]+@[\w]+'),      '[UPI]'),
+        (re.compile(r'[6-9]\d{9}'),          '[PHONE]'),
+        (re.compile(r'\d{12,}'),             '[ID]'),   # only 12+ digit numbers
+        (re.compile(r'[A-Z]{5}\d{4}[A-Z]'), '[PAN]'),
+    ]
+    for p, r in patterns:
+        text = p.sub(r, text)
+    return text
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
