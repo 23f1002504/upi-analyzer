@@ -255,26 +255,19 @@ def _parse_phonepay_csv(content: bytes) -> list[dict]:
 
 
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
-    # SECURITY: fail closed. Never return all users' transactions when the
-    # authenticated user ID is missing.
+    # SECURITY: fail closed. Never return transactions across users.
     if user_id is None:
         return []
-
     q = db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id))
-
-    if date_from:
-        q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
-
+    if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
     if date_to:
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
         q = q.filter(TransactionDB.date <= datetime.fromisoformat(dt))
-
     if not all_rows:
         try:
             q = q.filter(TransactionDB.included != False)
         except Exception:
             pass  # column may not exist in old DB
-
     return q.order_by(TransactionDB.date.desc()).all()
 
 
@@ -430,7 +423,8 @@ def rag_index(date_from:str=None, date_to:str=None,
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to)
     if not txns: raise HTTPException(400, "No transactions")
-    return rag_service.index_transactions([_row(t) for t in txns], user_id=uid)
+    return rag_service.index_transactions([_row(t) for t in txns],
+                                          user_id=str(uid) if uid else "anon")
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(require_user)):
@@ -469,35 +463,21 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(require
         "largest_transactions": a.get("largest_transactions", []),
         "date_range":          date_range,
     }
-    return rag_service.query(req.question, external_stats=stats, user_id=uid)
+    return rag_service.query(req.question,
+                              user_id=str(uid) if uid else "anon",
+                              external_stats=stats)
 
 
 
 @app.get("/api/rag/status")
 def rag_status(db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
-    txns = _query(db, uid, all_rows=True)
-
-    chroma = rag_service.chromadb_status()
-
-    # Do not expose the global Chroma collection count. That could reveal
-    # information about other users' indexed records.
-    user_indexed_count = 0
-    col = rag_service._get_collection()
-    if col is not None and uid is not None:
-        try:
-            user_indexed_count = len(
-                col.get(where={"user_id": str(uid)}, include=[])["ids"]
-            )
-        except Exception:
-            user_indexed_count = 0
-
-    return {
-        "ollama": rag_service.ollama_status(),
-        "chromadb": chroma,
-        "indexed_count": user_indexed_count,
-        "transactions_loaded": len(txns),
-    }
+    idx = rag_service.get_indexed_count(str(uid) if uid else "anon")
+    return {"ollama": rag_service.ollama_status(),
+            "indexed_count": idx,
+            "transactions_loaded": db.query(TransactionDB).filter(
+                TransactionDB.user_id == (str(uid) if uid else None)
+            ).count()}
 
 
 
