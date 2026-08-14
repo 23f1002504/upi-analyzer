@@ -1,21 +1,28 @@
+"""
+RAG Service — proper implementation:
+1. Per-user ChromaDB collections (no cross-user data)
+2. Real vector embeddings via all-MiniLM-L6-v2
+3. Semantic retrieval + aggregate stats both sent to Groq
+4. Merchant names + dates sent to Groq, only acct/UPI/phone masked
+"""
 import os, re, requests
 from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama3-8b-8192")
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
-
 OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:8b")
+CHROMA_PATH  = "./chroma_db"
 
-# ── Data masking ──────────────────────────────────────────────────────────────
+# ── Masking — only truly sensitive fields ─────────────────────────────────────
 _MASKS = [
     (re.compile(r'\b[X*]{2,}\d{4}\b'),      '[ACCT]'),
     (re.compile(r'\b[\w.\-]+@[\w]+\b'),      '[UPI]'),
     (re.compile(r'\b[6-9]\d{9}\b'),          '[PHONE]'),
-    (re.compile(r'\b\d{10,}\b'),             '[ID]'),
+    (re.compile(r'\b\d{12,}\b'),             '[ID]'),
     (re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b'), '[PAN]'),
 ]
 
@@ -25,10 +32,131 @@ def _mask(text: str) -> str:
     return text
 
 
-# ── Groq call (OpenAI-compatible) ─────────────────────────────────────────────
+# ── ChromaDB — per-user collections ──────────────────────────────────────────
+_chroma_client = None
+_ef            = None
+
+def _get_chroma():
+    global _chroma_client, _ef
+    if _chroma_client is None:
+        try:
+            import chromadb
+            from chromadb.utils import embedding_functions
+            _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name="all-MiniLM-L6-v2"
+            )
+            _chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+            print("ChromaDB initialized")
+        except Exception as e:
+            print(f"ChromaDB unavailable: {e}")
+    return _chroma_client, _ef
+
+
+def _get_user_collection(user_id: str):
+    """Each user gets their own ChromaDB collection — complete isolation."""
+    client, ef = _get_chroma()
+    if client is None:
+        return None
+    safe_uid = str(user_id).replace("-", "_")
+    col_name = f"user_{safe_uid}"
+    try:
+        return client.get_or_create_collection(
+            name=col_name,
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+    except Exception as e:
+        print(f"Collection error: {e}")
+        return None
+
+
+def index_transactions(transactions: list[dict], user_id: str = None) -> dict:
+    """
+    Index transactions into user-specific ChromaDB collection.
+    Each chunk = one transaction with merchant name, category, date, amount.
+    """
+    col = _get_user_collection(user_id or "anon")
+    if col is None:
+        return {"indexed": 0, "status": "chromadb unavailable"}
+
+    # Clear existing user data
+    try:
+        existing = col.get()
+        if existing["ids"]:
+            col.delete(ids=existing["ids"])
+    except: pass
+
+    docs, ids, metas = [], [], []
+    for i, t in enumerate(transactions):
+        amount   = float(t.get("amount", 0))
+        txn_type = str(t.get("transaction_type", "sent"))
+        merchant = _mask(str(t.get("merchant", "Unknown")))  # mask acct refs in names
+        category = str(t.get("category", "Other"))
+        date     = str(t.get("date", ""))[:10]
+        note     = str(t.get("note", ""))
+
+        direction = "paid to" if txn_type == "sent" else "received from"
+
+        # Rich document — merchant name + category + date for semantic search
+        doc = (
+            f"Rs.{abs(amount):.0f} {direction} {merchant} on {date}. "
+            f"Category: {category}."
+            + (f" Status: {note}." if note and note != "nan" else "")
+        )
+
+        docs.append(doc)
+        ids.append(f"t_{i}")
+        metas.append({
+            "amount":           amount,
+            "transaction_type": txn_type,
+            "merchant":         merchant,
+            "category":         category,
+            "date":             date,
+        })
+
+    if docs:
+        col.add(documents=docs, ids=ids, metadatas=metas)
+
+    print(f"Indexed {len(docs)} transactions for user {user_id}")
+    return {"indexed": len(docs), "status": "ok"}
+
+
+def retrieve(question: str, user_id: str, n: int = 10) -> list[dict]:
+    """Semantic search — finds most relevant transactions for the question."""
+    col = _get_user_collection(user_id or "anon")
+    if col is None or col.count() == 0:
+        return []
+    try:
+        results = col.query(
+            query_texts=[question],
+            n_results=min(n, col.count()),
+        )
+        return [
+            {"document": d, "metadata": m}
+            for d, m in zip(
+                results["documents"][0],
+                results["metadatas"][0],
+            )
+        ]
+    except Exception as e:
+        print(f"Retrieval error: {e}")
+        return []
+
+
+def get_indexed_count(user_id: str) -> int:
+    col = _get_user_collection(user_id or "anon")
+    if col is None:
+        return 0
+    try:
+        return col.count()
+    except:
+        return 0
+
+
+# ── LLM calls ─────────────────────────────────────────────────────────────────
 def _call_groq(prompt: str) -> Optional[str]:
     if not GROQ_API_KEY:
-        print("GROQ_API_KEY not set in environment")
+        print("GROQ_API_KEY not set")
         return None
     try:
         resp = requests.post(
@@ -40,7 +168,7 @@ def _call_groq(prompt: str) -> Optional[str]:
             json={
                 "model":       GROQ_MODEL,
                 "messages":    [{"role": "user", "content": prompt}],
-                "max_tokens":  400,
+                "max_tokens":  512,
                 "temperature": 0.3,
             },
             timeout=30,
@@ -51,11 +179,9 @@ def _call_groq(prompt: str) -> Optional[str]:
         return text
     except Exception as e:
         print(f"Groq error: {e}")
-        print(f"Response: {resp.text if 'resp' in dir() else 'no response'}")
         return None
 
 
-# ── Ollama fallback (local only) ──────────────────────────────────────────────
 def _call_ollama(prompt: str) -> Optional[str]:
     try:
         resp = requests.post(
@@ -70,128 +196,92 @@ def _call_ollama(prompt: str) -> Optional[str]:
 
 
 def _call_llm(prompt: str) -> str:
-    result = _call_groq(prompt)
-    if result:
-        return result
-    result = _call_ollama(prompt)
+    result = _call_groq(prompt) or _call_ollama(prompt)
     if result:
         return result
     if not GROQ_API_KEY:
-        return "⚠ AI unavailable: GROQ_API_KEY not set in Railway environment variables."
-    return "⚠ AI temporarily unavailable. Please try again."
+        return "AI unavailable: GROQ_API_KEY not set in Railway environment variables."
+    return "AI temporarily unavailable. Please try again."
 
 
-# ── ChromaDB (optional — for local vector search) ─────────────────────────────
-_collection = None
-
-def _get_collection():
-    global _collection
-    if _collection is None:
-        try:
-            import chromadb
-            from chromadb.utils import embedding_functions
-            ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name="all-MiniLM-L6-v2"
-            )
-            client = chromadb.PersistentClient(path="./chroma_db")
-            _collection = client.get_or_create_collection(
-                name="upi_transactions",
-                embedding_function=ef,
-                metadata={"hnsw:space": "cosine"},
-            )
-        except Exception as e:
-            print(f"ChromaDB init error: {e}")
-    return _collection
-
-def index_transactions(transactions: list[dict]) -> dict:
-    col = _get_collection()
-    if col is None:
-        return {"indexed": 0, "status": "chromadb unavailable"}
-    if col.count() > 0:
-        col.delete(ids=col.get()["ids"])
-    docs, ids, metas = [], [], []
-    for i, t in enumerate(transactions):
-        amount   = float(t.get("amount", 0))
-        txn_type = str(t.get("transaction_type", "sent"))
-        category = str(t.get("category", "Other"))
-        month    = str(t.get("date", ""))[:7]
-        direction = "outgoing" if txn_type == "sent" else "incoming"
-        docs.append(f"Rs.{abs(amount):.0f} {direction} {category} in {month}.")
-        ids.append(f"txn_{i}")
-        metas.append({"amount": amount, "transaction_type": txn_type,
-                      "category": category, "month": month})
-    col.add(documents=docs, ids=ids, metadatas=metas)
-    return {"indexed": len(docs), "status": "ok"}
-
-
-# ── Main query — stats come from SQLite via main.py ───────────────────────────
-def query(user_question: str, external_stats: dict = None) -> dict:
+# ── Main query — RAG + aggregate stats ────────────────────────────────────────
+def query(user_question: str, user_id: str = None,
+          external_stats: dict = None) -> dict:
+    """
+    Full RAG pipeline:
+    1. Semantic retrieval from user's ChromaDB collection
+    2. Aggregate stats from SQLite (passed via external_stats)
+    3. Both sent to Groq — gives specific + contextual answers
+    """
     stats = external_stats or {}
+
     if not stats:
         return {
-            "answer": "No transaction data found. Upload a CSV first.",
-            "sources": [], "provider": "none"
+            "answer":   "No transaction data. Upload a CSV first.",
+            "sources":  [],
+            "provider": "none",
         }
 
+    # ── Step 1: Semantic retrieval ────────────────────────────────────────────
+    hits = []
+    if user_id:
+        hits = retrieve(user_question, user_id, n=10)
+
+    retrieved_docs = "\n".join(f"  • {h['document']}" for h in hits)
+    if not retrieved_docs:
+        retrieved_docs = "  (Index not built — click Re-index for transaction-level answers)"
+
+    # ── Step 2: Aggregate context ─────────────────────────────────────────────
     total_spent    = stats.get("total_spent", 0)
     total_received = stats.get("total_received", 0)
     cat            = stats.get("category_breakdown", {})
-    top_merchants  = stats.get("top_merchants", [])       # list of {name, spent, count}
-    top_received   = stats.get("top_received_sources", []) # list of {name, received}
-    date_range     = stats.get("date_range", "")
+    top_merchants  = stats.get("top_merchants", [])
     monthly        = stats.get("monthly_trend", {})
     recurring      = stats.get("recurring_merchants", [])
     largest        = stats.get("largest_transactions", [])
+    date_range     = stats.get("date_range", "")
 
-    # Category breakdown
     cat_lines = "\n".join(
-        f"  {name}: Rs.{amt} ({round(amt / max(total_spent, 1) * 100)}%)"
-        for name, amt in list(cat.items())[:10]
+        f"  {k}: Rs.{v} ({round(v/max(total_spent,1)*100)}%)"
+        for k, v in list(cat.items())[:8]
     ) or "  No data"
 
-    # Top merchants (merchant names + amounts - useful for analysis)
     merchant_lines = "\n".join(
         f"  {m['name']}: Rs.{m['spent']} ({m['count']} times)"
-        for m in top_merchants[:8]
-    ) if top_merchants else "  No data"
+        for m in top_merchants[:6]
+    ) or "  No data"
 
-    # Monthly trend
     monthly_lines = "\n".join(
-        f"  {month}: Rs.{amt}"
-        for month, amt in list(monthly.items())[-6:]  # last 6 months
-    ) if monthly else "  No data"
+        f"  {mo}: Rs.{amt}"
+        for mo, amt in list(monthly.items())[-6:]
+    ) or "  No data"
 
-    # Recurring payments
     recurring_lines = "\n".join(
-        f"  {r['merchant']}: Rs.{r['avg']:.0f} avg × {r['count']} times = Rs.{r['total']:.0f} total"
-        for r in recurring[:5]
-    ) if recurring else "  None"
+        f"  {r['merchant']}: Rs.{r['avg']:.0f}/time × {r['count']} = Rs.{r['total']:.0f}"
+        for r in recurring[:4]
+    ) or "  None"
 
-    # Largest payments
     largest_lines = "\n".join(
-        f"  {t['merchant']}: Rs.{t['amount']} on {t['date']} ({t['category']})"
-        for t in largest[:5]
-    ) if largest else "  None"
+        f"  {t['merchant']}: Rs.{t['amount']} on {t['date']}"
+        for t in largest[:4]
+    ) or "  None"
 
-    # Mask only truly sensitive fields from question (not merchant names)
-    safe_q = _mask_sensitive_only(user_question)
+    safe_q = _mask(user_question)
 
-    prompt = f"""You are a personal finance analyst. Give specific, actionable answers using the data below. Use Rs. for amounts. Be concise (4-5 sentences max).
+    # ── Step 3: Build prompt ──────────────────────────────────────────────────
+    prompt = f"""You are a personal finance analyst. Give specific, actionable answers. Use Rs. Max 4-5 sentences.
 
-TRANSACTION SUMMARY:
-Period: {date_range or "All time"}
-Total spent:    Rs.{total_spent}
-Total received: Rs.{total_received}
-Net flow:       Rs.{round(total_received - total_spent, 2)}
-Transactions:   {stats.get('total_transactions', 0)}
+PERIOD: {date_range or "All available data"}
+TOTAL SPENT: Rs.{total_spent} | RECEIVED: Rs.{total_received} | NET: Rs.{round(total_received-total_spent,2)}
+TRANSACTIONS: {stats.get('total_transactions',0)}
 
 SPENDING BY CATEGORY:
 {cat_lines}
 
-TOP MERCHANTS (where money went):
+TOP MERCHANTS:
 {merchant_lines}
 
-MONTHLY SPENDING TREND:
+MONTHLY TREND:
 {monthly_lines}
 
 RECURRING PAYMENTS:
@@ -200,53 +290,45 @@ RECURRING PAYMENTS:
 LARGEST PAYMENTS:
 {largest_lines}
 
-Question: {safe_q}
-Answer:"""
+SEMANTICALLY RELEVANT TRANSACTIONS (from vector search):
+{retrieved_docs}
+
+QUESTION: {safe_q}
+ANSWER:"""
 
     provider = "groq" if GROQ_API_KEY else "ollama"
+    answer   = _call_llm(prompt)
+
     return {
-        "answer":   _call_llm(prompt),
-        "sources":  [],
+        "answer":   answer,
+        "sources":  [h["document"] for h in hits[:3]],
         "provider": provider,
+        "indexed":  len(hits),
     }
-
-
-def _mask_sensitive_only(text: str) -> str:
-    """Mask only account numbers, UPI IDs, phone numbers. Keep merchant names and dates."""
-    patterns = [
-        (re.compile(r'[X*]{2,}\d{4}'),      '[ACCT]'),
-        (re.compile(r'[\w.\-]+@[\w]+'),      '[UPI]'),
-        (re.compile(r'[6-9]\d{9}'),          '[PHONE]'),
-        (re.compile(r'\d{12,}'),             '[ID]'),   # only 12+ digit numbers
-        (re.compile(r'[A-Z]{5}\d{4}[A-Z]'), '[PAN]'),
-    ]
-    for p, r in patterns:
-        text = p.sub(r, text)
-    return text
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
     if GROQ_API_KEY:
         return {
-            "running": True,
+            "running":      True,
             "active_model": GROQ_MODEL,
-            "provider": "groq",
-            "models": [GROQ_MODEL],
+            "provider":     "groq",
+            "models":       [GROQ_MODEL],
         }
     try:
         resp   = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
         models = [m["name"] for m in resp.json().get("models", [])]
         return {
-            "running": bool(models),
+            "running":      bool(models),
             "active_model": OLLAMA_MODEL,
-            "provider": "ollama",
-            "models": models,
+            "provider":     "ollama",
+            "models":       models,
         }
     except:
         return {
-            "running": False,
+            "running":      False,
             "active_model": OLLAMA_MODEL,
-            "provider": "none",
-            "models": [],
+            "provider":     "none",
+            "models":       [],
         }

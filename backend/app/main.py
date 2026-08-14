@@ -421,7 +421,8 @@ def rag_index(date_from:str=None, date_to:str=None,
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to)
     if not txns: raise HTTPException(400, "No transactions")
-    return rag_service.index_transactions([_row(t) for t in txns])
+    return rag_service.index_transactions([_row(t) for t in txns],
+                                          user_id=str(uid) if uid else "anon")
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
@@ -460,16 +461,21 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_cur
         "largest_transactions": a.get("largest_transactions", []),
         "date_range":          date_range,
     }
-    return rag_service.query(req.question, external_stats=stats)
+    return rag_service.query(req.question,
+                              user_id=str(uid) if uid else "anon",
+                              external_stats=stats)
 
 
 
 @app.get("/api/rag/status")
-def rag_status(db:Session=Depends(get_db)):
-    col = rag_service._get_collection()
+def rag_status(db:Session=Depends(get_db), user=Depends(get_current_user)):
+    uid = user.id if user else None
+    idx = rag_service.get_indexed_count(str(uid) if uid else "anon")
     return {"ollama": rag_service.ollama_status(),
-            "indexed_count": col.count(),
-            "transactions_loaded": db.query(TransactionDB).count()}
+            "indexed_count": idx,
+            "transactions_loaded": db.query(TransactionDB).filter(
+                TransactionDB.user_id == (str(uid) if uid else None)
+            ).count()}
 
 
 
