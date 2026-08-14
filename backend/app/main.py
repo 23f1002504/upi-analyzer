@@ -255,17 +255,26 @@ def _parse_phonepay_csv(content: bytes) -> list[dict]:
 
 
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
-    q = db.query(TransactionDB)
-    if user_id: q = q.filter(TransactionDB.user_id == str(user_id))
-    if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
+    # SECURITY: fail closed. Never return all users' transactions when the
+    # authenticated user ID is missing.
+    if user_id is None:
+        return []
+
+    q = db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id))
+
+    if date_from:
+        q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
+
     if date_to:
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
         q = q.filter(TransactionDB.date <= datetime.fromisoformat(dt))
+
     if not all_rows:
         try:
             q = q.filter(TransactionDB.included != False)
         except Exception:
             pass  # column may not exist in old DB
+
     return q.order_by(TransactionDB.date.desc()).all()
 
 
@@ -307,7 +316,7 @@ def me(user: UserDB = Depends(require_user)):
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...),
                      db: Session = Depends(get_db),
-                     user = Depends(get_current_user)):
+                     user = Depends(require_user)):
     txns = _parser.parse_pdf(io.BytesIO(await file.read()))
     rows = [{**t.model_dump(), 'date': t.date.isoformat()} for t in txns]
     uid  = user.id if user else None
@@ -318,7 +327,7 @@ async def upload_pdf(file: UploadFile = File(...),
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...),
                      db: Session = Depends(get_db),
-                     user = Depends(get_current_user)):
+                     user = Depends(require_user)):
     content = await file.read()
     rows = []
 
@@ -376,13 +385,13 @@ async def upload_csv(file: UploadFile = File(...),
 
 @app.get("/api/transactions")
 def get_transactions(date_from:str=None, date_to:str=None,
-                     db:Session=Depends(get_db), user=Depends(get_current_user)):
+                     db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to, all_rows=True)
     return JSONResponse(_safe({"transactions":[_row(t) for t in txns],"count":len(txns)}))
 
 @app.delete("/api/transactions")
-def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
+def clear(db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB)
     if uid: q = q.filter(TransactionDB.user_id == str(uid))
@@ -391,7 +400,7 @@ def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
 
 @app.get("/api/analytics")
 def analytics(date_from:str=None, date_to:str=None,
-              db:Session=Depends(get_db), user=Depends(get_current_user)):
+              db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to)
     if not txns: raise HTTPException(404, "No transactions in selected range")
@@ -401,7 +410,7 @@ def analytics(date_from:str=None, date_to:str=None,
     return JSONResponse(_safe(AnalyticsEngine(objs).get_analytics()))
 
 @app.get("/api/date-range")
-def date_range(db:Session=Depends(get_db), user=Depends(get_current_user)):
+def date_range(db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
     q = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date), func.count(TransactionDB.id))
     if uid: q = q.filter(TransactionDB.user_id == str(uid))
@@ -417,15 +426,14 @@ class RAGReq(BaseModel):
 
 @app.post("/api/rag/index")
 def rag_index(date_from:str=None, date_to:str=None,
-              db:Session=Depends(get_db), user=Depends(get_current_user)):
+              db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
     txns = _query(db, uid, date_from, date_to)
     if not txns: raise HTTPException(400, "No transactions")
-    return rag_service.index_transactions([_row(t) for t in txns],
-                                          user_id=str(uid) if uid else "anon")
+    return rag_service.index_transactions([_row(t) for t in txns], user_id=uid)
 
 @app.post("/api/rag/query")
-def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
+def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(require_user)):
     if not req.question.strip(): raise HTTPException(400, "Empty")
     uid  = user.id if user else None
     txns = _query(db, uid, all_rows=False)
@@ -461,21 +469,35 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(get_cur
         "largest_transactions": a.get("largest_transactions", []),
         "date_range":          date_range,
     }
-    return rag_service.query(req.question,
-                              user_id=str(uid) if uid else "anon",
-                              external_stats=stats)
+    return rag_service.query(req.question, external_stats=stats, user_id=uid)
 
 
 
 @app.get("/api/rag/status")
-def rag_status(db:Session=Depends(get_db), user=Depends(get_current_user)):
+def rag_status(db:Session=Depends(get_db), user=Depends(require_user)):
     uid = user.id if user else None
-    idx = rag_service.get_indexed_count(str(uid) if uid else "anon")
-    return {"ollama": rag_service.ollama_status(),
-            "indexed_count": idx,
-            "transactions_loaded": db.query(TransactionDB).filter(
-                TransactionDB.user_id == (str(uid) if uid else None)
-            ).count()}
+    txns = _query(db, uid, all_rows=True)
+
+    chroma = rag_service.chromadb_status()
+
+    # Do not expose the global Chroma collection count. That could reveal
+    # information about other users' indexed records.
+    user_indexed_count = 0
+    col = rag_service._get_collection()
+    if col is not None and uid is not None:
+        try:
+            user_indexed_count = len(
+                col.get(where={"user_id": str(uid)}, include=[])["ids"]
+            )
+        except Exception:
+            user_indexed_count = 0
+
+    return {
+        "ollama": rag_service.ollama_status(),
+        "chromadb": chroma,
+        "indexed_count": user_indexed_count,
+        "transactions_loaded": len(txns),
+    }
 
 
 
@@ -485,7 +507,7 @@ class UpdateTxnReq(BaseModel):
 
 @app.patch("/api/transactions/{txn_id}")
 def update_transaction(txn_id: int, req: UpdateTxnReq,
-                       db: Session = Depends(get_db), user = Depends(get_current_user)):
+                       db: Session = Depends(get_db), user = Depends(require_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB).filter(TransactionDB.id == txn_id)
     if uid: q = q.filter(TransactionDB.user_id == str(uid))
@@ -506,7 +528,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
 
 
 @app.get("/api/categories")
-def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
+def get_categories(db: Session = Depends(get_db), user = Depends(require_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
     if uid: q = q.filter(TransactionDB.user_id == str(uid))
@@ -523,7 +545,7 @@ class SMSSyncReq(BaseModel):
     transactions: list[dict]
 
 @app.post("/api/sms/sync")
-def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
+def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(require_user)):
     uid = user.id if user else None
     rows = []
     for t in req.transactions:
