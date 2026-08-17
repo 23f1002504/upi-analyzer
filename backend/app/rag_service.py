@@ -309,7 +309,7 @@ ANSWER:"""
 
 # ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
-    if GROQ_API_KEY:
+    if GROQ_MODEL:
         return {
             "running":      True,
             "active_model": GROQ_MODEL,
