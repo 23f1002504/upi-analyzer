@@ -472,7 +472,7 @@ def rag_query(req: RAGReq, db: Session = Depends(get_db), user = Depends(require
 
 
 @app.get("/api/rag/status")
-def rag_status(db:Session=Depends(get_db), user=Depends(require_user)):
+def rag_status(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id
     idx = rag_service.get_indexed_count(str(uid) if uid else "anon")
     return {"ollama": rag_service.ollama_status(),
@@ -501,9 +501,9 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.category is not None:
         # Store as custom_category if different from auto-detected
         try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
+        t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
     return _row(t)

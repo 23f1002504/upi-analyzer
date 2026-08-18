@@ -1492,9 +1492,13 @@ export class AppComponent implements OnInit {
 
   // ── AI ────────────────────────────────────────────────────────────────────
   checkOllama() {
-    this.http.get<any>(`${this.api}/rag/status`).subscribe({
-      next:(s)=>{ this.ollamaOk=s.ollama?.running; this.status=s.ollama; this.indexedCount=s.indexed_count; },
-      error:()=>{ this.ollamaOk=false; }
+    this.http.get<any>(`${this.api}/rag/status`, { headers: this.getHeaders() }).subscribe({
+      next: (s) => {
+        this.ollamaOk    = s.ollama?.running || false;
+        this.status      = s.ollama;
+        this.indexedCount = s.indexed_count || 0;
+      },
+      error: () => { this.ollamaOk = false; }
     });
   }
 
@@ -1519,7 +1523,7 @@ export class AppComponent implements OnInit {
     this.messages.push({role:'user',text:q}); this.question=''; this.chatLoading=true;
     const ph:Message={role:'assistant',text:'',loading:true};
     this.messages.push(ph); this.scroll();
-    this.http.post<any>(`${this.api}/rag/query`,{question:q},{headers:this.getHeaders()}).subscribe({
+    this.http.post<any>(`${this.api}/rag/query`,{question:q}).subscribe({
       next:(r)=>{ this.messages[this.messages.indexOf(ph)]={role:'assistant',text:r.answer,sources:r.sources}; this.chatLoading=false; this.scroll(); },
       error:()=>{ this.messages[this.messages.indexOf(ph)]={role:'assistant',text:'Error contacting backend.'}; this.chatLoading=false; }
     });
