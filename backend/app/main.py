@@ -19,7 +19,7 @@ from .auth import (UserDB, hash_pw, verify_pw, create_token,
                    get_current_user, require_user, require_admin)
 from . import rag_service
 
-app = FastAPI(title="UPI Transaction Analyzer")
+app = FastAPI(title="Transaction Analyzer")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
