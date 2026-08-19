@@ -69,7 +69,11 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         AI Chat
         <span class="sb-online" *ngIf="ollamaOk"></span>
       </button>
-      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin'); loadAdminData()" *ngIf="isAdmin">
+      <button class="sb-lnk" [class.on]="tab==='about'" (click)="go('about')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        About
+      </button>
+      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin')" *ngIf="isAdmin">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Admin
         <span class="sb-badge-red" *ngIf="adminStats?.online_now">{{ adminStats?.online_now }}</span>
@@ -385,7 +389,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         <div class="ai-status-row">
           <div class="ait-status" [class.on]="ollamaOk" [class.off]="!ollamaOk">
             <span class="ait-dot"></span>
-            {{ ollamaOk ? (status?.provider==='groq' ? 'Groq AI' : status?.active_model||'Online') : 'AI Offline' }}
+            {{ ollamaOk ? (status?.provider==='groq' ? '⚡ Groq — ' + (status?.active_model||'') : '● ' + (status?.active_model||'Online')) : '○ Offline' }}
           </div>
           <div class="ait-idx" *ngIf="indexedCount">{{ indexedCount }} docs</div>
           <button class="ait-btn" (click)="reIndex()" [disabled]="indexing||!totalStored">
@@ -424,7 +428,80 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </div>
     </div>
 
-        <!-- ADMIN TAB -->
+    
+    <!-- ABOUT TAB -->
+    <main class="page" *ngIf="tab==='about'">
+      <div class="about-wrap" *ngIf="!aboutLoading">
+
+        <!-- View mode -->
+        <div class="about-content" *ngIf="!editingAbout">
+          <div class="about-hero">
+            <div class="about-logo">₹</div>
+            <h1 class="about-title">{{ aboutContent.about_title || 'UPI Transaction Analyzer' }}</h1>
+            <p class="about-sub">{{ aboutContent.about_subtitle }}</p>
+          </div>
+          <div class="about-body" [innerHTML]="aboutBodyHtml()"></div>
+          <div class="about-version">{{ aboutContent.about_version }}</div>
+
+          <div class="about-actions">
+            <button class="about-sugg-btn" (click)="showSuggestionForm=!showSuggestionForm">
+              💡 {{ showSuggestionForm ? 'Close' : 'Send a suggestion' }}
+            </button>
+            <button class="about-edit-btn" *ngIf="isAdmin" (click)="startEditAbout()">
+              ✎ Edit content
+            </button>
+          </div>
+
+          <!-- Suggestion form -->
+          <div class="sugg-form" *ngIf="showSuggestionForm">
+            <div class="sugg-title-row">
+              <div class="sugg-heading">Got an idea? We'd love to hear it.</div>
+            </div>
+            <div *ngIf="suggSent" class="sugg-sent">
+              ✓ Thanks! Your suggestion has been sent.
+            </div>
+            <div *ngIf="!suggSent">
+              <input class="sugg-in" [(ngModel)]="suggTitle"
+                     placeholder="Short title (e.g. Add dark mode)" maxlength="120">
+              <textarea class="sugg-ta" [(ngModel)]="suggMsg"
+                        placeholder="Describe your idea in detail…" rows="4" maxlength="1000"></textarea>
+              <div class="sugg-err" *ngIf="suggErr">{{ suggErr }}</div>
+              <button class="sugg-submit" (click)="submitSuggestion()">Submit suggestion</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit mode (admin only) -->
+        <div class="about-edit-panel" *ngIf="editingAbout && isAdmin">
+          <div class="edit-head">
+            <div class="edit-title">Edit About Page</div>
+            <div class="edit-actions">
+              <button class="edit-save" (click)="saveAbout()">Save changes</button>
+              <button class="edit-cancel" (click)="editingAbout=false">Cancel</button>
+            </div>
+          </div>
+          <div class="edit-field">
+            <label>Title</label>
+            <input class="edit-in" [(ngModel)]="aboutEdit.about_title">
+          </div>
+          <div class="edit-field">
+            <label>Subtitle</label>
+            <input class="edit-in" [(ngModel)]="aboutEdit.about_subtitle">
+          </div>
+          <div class="edit-field">
+            <label>Body (markdown-ish: **bold**, bullet points)</label>
+            <textarea class="edit-ta" [(ngModel)]="aboutEdit.about_body" rows="14"></textarea>
+          </div>
+          <div class="edit-field">
+            <label>Version / footer</label>
+            <input class="edit-in" [(ngModel)]="aboutEdit.about_version">
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ADMIN TAB -->
     <main class="page" *ngIf="tab==='admin' && isAdmin">
 
       <div class="adm-header">
@@ -508,12 +585,48 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         </table>
       </div>
 
+
+      <!-- Suggestions -->
+      <div class="adm-card" style="margin-top:16px" *ngIf="tab==='admin'">
+        <div class="adm-card-head">
+          User Suggestions
+          <span class="adm-online-badge" *ngIf="adminSuggestions.length">{{ adminSuggestions.length }}</span>
+          <button class="adm-sugg-toggle" (click)="loadAdminSuggestions(); showAdminSugg=!showAdminSugg">
+            {{ showAdminSugg ? 'Hide' : 'View suggestions' }}
+          </button>
+        </div>
+        <div *ngIf="showAdminSugg">
+          <div *ngIf="!adminSuggestions.length" class="adm-empty">No suggestions yet.</div>
+          <table class="adm-tbl" *ngIf="adminSuggestions.length">
+            <thead><tr>
+              <th>From</th><th>Title</th><th>Message</th><th>Date</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              <tr *ngFor="let s of adminSuggestions">
+                <td class="adm-email">{{ s.user_name }}<br><small>{{ s.user_email }}</small></td>
+                <td class="adm-name">{{ s.title }}</td>
+                <td class="adm-dim" style="max-width:300px;white-space:pre-wrap">{{ s.message }}</td>
+                <td class="adm-dim">{{ s.created_at | date:'d MMM' }}</td>
+                <td>
+                  <select class="sugg-status-sel" [(ngModel)]="s.status"
+                          (change)="updateSuggStatus(s)">
+                    <option value="new">New</option>
+                    <option value="reviewed">Reviewed</option>
+                    <option value="done">Done</option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </main>
 
 </div>
 </div>
-  `,
 
+  `,
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -593,7 +706,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:none}
 
     /* ── MAIN ── */
-    .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+    .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;height:100vh}
     .bar{height:50px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0;background:#0a0a0a}
     .burger{display:none;background:none;border:none;color:#666;cursor:pointer;padding:5px;border-radius:6px}
     .burger:hover{background:#181818;color:var(--text)}
@@ -699,7 +812,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .load-more:hover{color:#aaa}
 
     /* ── AI ── */
-    .ai-wrap{display:flex;flex:1;overflow:hidden}
+    .ai-wrap{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
     .ai-side{width:210px;flex-shrink:0;border-right:1px solid var(--border);padding:16px 14px;overflow-y:auto;background:#0a0a0a;display:flex;flex-direction:column;gap:0}
     .as-sec{padding:10px 0;display:flex;flex-direction:column;gap:6px}
     .as-div{height:1px;background:var(--border)}
@@ -715,8 +828,8 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .as-btn:disabled{opacity:.3;cursor:default}
     .as-q{background:none;border:none;color:#666;font-size:11px;text-align:left;padding:5px 0;cursor:pointer;line-height:1.6;transition:color .15s}
     .as-q:hover{color:#aaa}
-    .ai-chat{flex:1;display:flex;flex-direction:column;min-width:0}
-    .chat-msgs{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
+    .ai-chat{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+    .chat-msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;min-height:0;scroll-behavior:smooth}
     .chat-empty{margin:auto;text-align:center}
     .ce-t{font-size:16px;font-weight:500;color:#666;margin-bottom:6px}
     .ce-s{font-size:12px;color:#222}
@@ -817,7 +930,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
     /* AI tab - single column, no side panel */
     .ai-wrap{display:flex;flex-direction:column;flex:1;overflow:hidden}
-    .ai-topbar{border-bottom:1px solid var(--border);padding:10px 20px;background:#0a0a0a;flex-shrink:0}
+    .ai-topbar{border-bottom:1px solid var(--border);padding:10px 20px;background:#0a0a0a;flex-shrink:0;max-height:130px;overflow:hidden}
     .ai-status-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
     .ait-status{display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:6px}
     .ait-status.on{background:#0a1a0f;color:#4ade80;border:1px solid #1a4a2a}
@@ -827,7 +940,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .ait-btn{background:#161616;border:1px solid var(--border);color:#888;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;transition:all .15s}
     .ait-btn:hover:not(:disabled){background:#1e1e1e;color:#ccc}
     .ait-btn:disabled{opacity:.3;cursor:default}
-    .ai-suggestions{display:flex;gap:6px;flex-wrap:wrap}
+    .ai-suggestions{display:flex;gap:6px;flex-wrap:wrap;max-height:80px;overflow-y:auto}
     .ait-sugg{background:#111;border:1px solid var(--border);color:#666;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
     .ait-sugg:hover{border-color:var(--border2);color:#bbb;background:#161616}
 
@@ -869,6 +982,54 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .adm-del{background:none;border:none;color:#2a1515;cursor:pointer;font-size:14px;padding:3px 8px;border-radius:5px;transition:all .15s}
     .adm-del:hover{background:#1f0a0a;color:#f87171}
 
+
+    /* ── About tab ── */
+    .about-wrap{max-width:720px;margin:0 auto}
+    .about-hero{text-align:center;padding:40px 0 32px;border-bottom:1px solid var(--border);margin-bottom:32px}
+    .about-logo{width:64px;height:64px;background:#fff;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#0a0a0a;margin:0 auto 16px}
+    .about-title{font-size:26px;font-weight:700;color:#f0f0f0;letter-spacing:-.5px;margin-bottom:8px}
+    .about-sub{font-size:15px;color:#666;line-height:1.6}
+    .about-body{font-size:14px;color:#aaa;line-height:1.8;margin-bottom:24px}
+    .about-body p{margin-bottom:12px}
+    .about-body strong{color:#e0e0e0;font-weight:600}
+    .about-body ul{margin:8px 0 12px 20px}
+    .about-body li{margin-bottom:4px;color:#aaa}
+    .about-version{font-size:11px;color:#333;margin-bottom:24px;text-align:right}
+    .about-actions{display:flex;gap:10px;margin-bottom:24px}
+    .about-sugg-btn{background:#111;border:1px solid var(--border);color:#aaa;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .15s}
+    .about-sugg-btn:hover{border-color:var(--border2);color:#e0e0e0}
+    .about-edit-btn{background:#1a1505;border:1px solid #2a2008;color:#fbbf24;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px}
+    .about-edit-btn:hover{background:#22190a}
+
+    /* Suggestion form */
+    .sugg-form{background:#111;border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:8px}
+    .sugg-heading{font-size:15px;font-weight:600;color:#e0e0e0;margin-bottom:16px}
+    .sugg-in{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;margin-bottom:10px;font-family:inherit}
+    .sugg-in:focus{border-color:var(--border2)}
+    .sugg-ta{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;resize:vertical;font-family:inherit;margin-bottom:10px}
+    .sugg-ta:focus{border-color:var(--border2)}
+    .sugg-err{color:#f87171;font-size:12px;margin-bottom:8px}
+    .sugg-sent{color:#4ade80;font-size:14px;padding:16px 0}
+    .sugg-submit{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:8px;padding:10px 22px;font-size:13px;font-weight:600;cursor:pointer}
+    .sugg-submit:hover{background:#ddd}
+
+    /* About edit panel */
+    .about-edit-panel{background:#111;border:1px solid var(--border);border-radius:12px;padding:24px}
+    .edit-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+    .edit-title{font-size:16px;font-weight:600;color:#f0f0f0}
+    .edit-actions{display:flex;gap:8px}
+    .edit-save{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer}
+    .edit-cancel{background:#1a1a1a;color:#888;border:1px solid var(--border);border-radius:7px;padding:8px 18px;font-size:13px;cursor:pointer}
+    .edit-field{margin-bottom:16px}
+    .edit-field label{display:block;font-size:11px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+    .edit-in{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;font-family:inherit}
+    .edit-ta{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;resize:vertical;font-family:inherit}
+
+    /* Admin suggestions */
+    .adm-sugg-toggle{margin-left:auto;background:#141414;border:1px solid var(--border);color:#888;padding:4px 12px;border-radius:5px;cursor:pointer;font-size:11px}
+    .adm-sugg-toggle:hover{color:#e0e0e0;border-color:var(--border2)}
+    .sugg-status-sel{background:#111;border:1px solid var(--border);color:#aaa;border-radius:5px;padding:3px 6px;font-size:11px;outline:none}
+
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -880,254 +1041,6 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       .ai-side{width:100%;border-right:none;border-bottom:1px solid var(--border)}
       .pie-wrap{flex-direction:column}
     }
-
-    /* UI ENHANCEMENT LAYER — visual only, functionality unchanged */
-    :host{
-      --bg:#0b0c0e;--surface:#121417;--surface2:#171a1e;
-      --border:#252a31;--border2:#353c45;--text:#f1f3f5;
-      --text2:#a9b0b8;--text3:#68717c;--green:#4ade80;--red:#f87171;
-      --blue:#60a5fa;--shadow:0 18px 55px rgba(0,0,0,.28);
-      display:block;color-scheme:dark;
-    }
-    *{scrollbar-width:thin;scrollbar-color:#30353c transparent}
-    *::-webkit-scrollbar{width:7px;height:7px}
-    *::-webkit-scrollbar-track{background:transparent}
-    *::-webkit-scrollbar-thumb{background:#2c3138;border-radius:20px}
-    *::-webkit-scrollbar-thumb:hover{background:#414852}
-
-    .page,.ai-wrap{animation:uiFade .3s ease both}
-    @keyframes uiFade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-    @keyframes cardIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-    @keyframes toastIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
-    @keyframes livePulse{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}50%{box-shadow:0 0 0 5px rgba(74,222,128,.08)}}
-
-    /* Auth */
-    .auth-screen{
-      position:relative;overflow:hidden;
-      background:radial-gradient(circle at 18% 20%,rgba(96,165,250,.09),transparent 30%),
-                 radial-gradient(circle at 82% 78%,rgba(74,222,128,.07),transparent 28%),var(--bg);
-    }
-    .auth-screen:before{
-      content:"";position:absolute;inset:0;pointer-events:none;
-      background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
-                       linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
-      background-size:38px 38px;
-    }
-    .auth-box{
-      position:relative;z-index:1;width:min(390px,calc(100vw - 32px));
-      padding:38px;background:rgba(18,20,23,.88);
-      border-color:rgba(255,255,255,.08);border-radius:22px;
-      box-shadow:0 30px 90px rgba(0,0,0,.45);backdrop-filter:blur(18px);
-      animation:cardIn .45s cubic-bezier(.2,.8,.2,1) both;
-    }
-    .auth-logo{box-shadow:0 8px 24px rgba(255,255,255,.08);transition:.25s}
-    .auth-logo:hover{transform:translateY(-2px) rotate(-2deg)}
-    .auth-in{background:rgba(8,9,10,.78);border-color:#272d34;transition:.2s}
-    .auth-in:focus{border-color:#4a5562;box-shadow:0 0 0 3px rgba(96,165,250,.07);transform:translateY(-1px)}
-    .auth-btn{box-shadow:0 8px 22px rgba(0,0,0,.2);transition:transform .2s,box-shadow .2s,background .2s!important}
-    .auth-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.3)}
-
-    /* Shell + sidebar */
-    .shell{background:radial-gradient(circle at 75% -20%,rgba(96,165,250,.035),transparent 28%),var(--bg)}
-    .sidebar{
-      background:rgba(9,10,11,.92);border-right-color:rgba(255,255,255,.075);
-      backdrop-filter:blur(16px);box-shadow:12px 0 40px rgba(0,0,0,.12);
-    }
-    .sb-brand{padding:20px 16px 16px;border-bottom-color:rgba(255,255,255,.065)}
-    .sb-logo{box-shadow:0 6px 18px rgba(255,255,255,.07);transition:transform .2s}
-    .sb-brand:hover .sb-logo{transform:scale(1.04)}
-    .sb-lnk{color:#737b85;overflow:hidden}
-    .sb-lnk:before{
-      content:"";position:absolute;left:0;top:7px;bottom:7px;width:2px;border-radius:2px;
-      background:#fff;opacity:0;transform:scaleY(.35);transition:.2s;
-    }
-    .sb-lnk:hover:not(:disabled){background:linear-gradient(90deg,#171a1e,#121417);color:#f0f2f4;transform:translateX(1px)}
-    .sb-lnk.on{background:linear-gradient(90deg,#1b1f24,#15181c);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
-    .sb-lnk.on:before{opacity:1;transform:scaleY(1)}
-    .sb-pill{background:#20252b;color:#9aa3ad;border:1px solid rgba(255,255,255,.035)}
-    .sb-filter{border-top-color:rgba(255,255,255,.065)}
-    .sb-reset,.sb-import-btn,.sb-clear-btn{transition:transform .18s,border-color .18s,color .18s,background .18s}
-    .sb-reset:hover,.sb-import-btn:hover,.sb-clear-btn:hover{transform:translateY(-1px)}
-    .sb-import-btn{background:linear-gradient(180deg,#181b1f,#131619)}
-    .overlay{backdrop-filter:blur(3px)}
-
-    /* Header */
-    .bar{
-      height:58px;padding:0 22px;background:rgba(9,10,11,.86);
-      border-bottom-color:rgba(255,255,255,.07);backdrop-filter:blur(16px);position:relative;z-index:5;
-    }
-    .bar:after{
-      content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
-      background:linear-gradient(90deg,transparent,rgba(96,165,250,.2),transparent);
-    }
-    .toast{animation:toastIn .28s cubic-bezier(.2,.8,.2,1) both;box-shadow:0 8px 24px rgba(0,0,0,.2)}
-
-    /* Content + KPI */
-    .page{padding:28px;background:radial-gradient(circle at 95% 0%,rgba(96,165,250,.025),transparent 26%)}
-    .dash{gap:22px}
-    .kpis{border-color:rgba(255,255,255,.075);box-shadow:var(--shadow)}
-    .kpi{
-      position:relative;background:linear-gradient(180deg,#111417,#0e1012);
-      min-height:100px;overflow:hidden;transition:transform .22s,background .22s;
-    }
-    .kpi:after{
-      content:"";position:absolute;width:90px;height:90px;right:-42px;top:-48px;border-radius:50%;
-      background:rgba(255,255,255,.025);transition:transform .3s;
-    }
-    .kpi:hover{transform:translateY(-2px);background:linear-gradient(180deg,#15191d,#101316)}
-    .kpi:hover:after{transform:scale(1.35)}
-    .kn{font-size:26px;text-shadow:0 1px 16px rgba(255,255,255,.04)}
-    .kn.g{text-shadow:0 0 24px rgba(74,222,128,.12)}
-    .kn.r{text-shadow:0 0 24px rgba(248,113,113,.1)}
-
-    /* Cards */
-    .grid{gap:18px}
-    .card{
-      position:relative;background:linear-gradient(180deg,rgba(23,26,30,.96),rgba(17,20,23,.96));
-      border-color:rgba(255,255,255,.075);border-radius:15px;
-      box-shadow:0 10px 32px rgba(0,0,0,.16);
-      transition:transform .22s,border-color .22s,box-shadow .22s;
-      animation:cardIn .42s ease both;
-    }
-    .card:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.12);box-shadow:0 16px 42px rgba(0,0,0,.23)}
-    .card:nth-child(2){animation-delay:.035s}.card:nth-child(3){animation-delay:.07s}
-    .card:nth-child(4){animation-delay:.105s}.card:nth-child(5){animation-delay:.14s}
-    .card:nth-child(6){animation-delay:.175s}.card:nth-child(7){animation-delay:.21s}
-    .ch{color:#b5bcc5;font-size:10px;letter-spacing:.8px}
-    .ch:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.07),transparent)}
-
-    /* Lists + category bars */
-    .pl-row,.cat-row,.row-item{transition:background .18s,transform .18s}
-    .pl-row{padding:6px 8px;border-radius:7px}
-    .pl-row:hover,.cat-row:hover{background:#1a1e22;transform:translateX(2px)}
-    .row-item{padding:8px 9px;margin:-3px -9px;border-radius:8px}
-    .row-item:hover{background:#1a1e22;transform:translateX(2px)}
-    .ri-name{color:#d7dce1}
-    .cat-row{padding:5px 7px;margin:-2px -7px;border-radius:7px}
-    .cat-bar-wrap{height:5px;background:#20242a;box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
-    .cat-bar{box-shadow:0 0 12px rgba(96,165,250,.08)}
-
-    /* Charts */
-    .ngx-charts{filter:drop-shadow(0 5px 12px rgba(0,0,0,.12))}
-    .ngx-charts .bar,.ngx-charts .cell{transition:opacity .18s,filter .18s}
-    .ngx-charts .bar:hover,.ngx-charts .cell:hover{opacity:1!important;filter:brightness(1.18)}
-    .ngx-charts .gridline-path,.ngx-charts .refline-path{stroke:#252b32!important;stroke-dasharray:3 5}
-    .ngx-charts .tick line{stroke:#20262d!important}
-
-    /* Transactions */
-    .txn-ct{color:#87909a}
-    .ctl{background:#121519;border-color:#292f36;min-height:34px}
-    .ctl:hover{background:#171b20}
-    .tbl-box{border-color:rgba(255,255,255,.075);box-shadow:0 14px 38px rgba(0,0,0,.18)}
-    .tbl th{background:#111417;position:sticky;top:0;z-index:1}
-    .tbl td{padding-top:12px;padding-bottom:12px;border-bottom-color:#181c21}
-    .tbl tbody tr{transition:background .16s}
-    .tbl tbody tr:hover td{background:#181c21}
-    .tbl tbody tr:hover .td-m{color:#fff}
-    .toggle-btn{transition:transform .18s,background .18s,color .18s}
-    .toggle-btn:hover{transform:scale(1.08)}
-    .toggle-btn.on{text-shadow:0 0 12px rgba(74,222,128,.28)}
-    .load-more{background:linear-gradient(180deg,#15181c,#111417);transition:.18s}
-    .load-more:hover{background:#1a1e23;color:#ddd}
-
-    /* Received */
-    .recv-strip{border-color:rgba(74,222,128,.12);box-shadow:0 10px 32px rgba(0,0,0,.14)}
-    .recv-kpi{background:linear-gradient(180deg,#0e1b12,#0b1510);transition:.2s}
-    .recv-kpi:hover{background:linear-gradient(180deg,#112216,#0c1811);transform:translateY(-1px)}
-    .recv-val{text-shadow:0 0 22px rgba(74,222,128,.11)}
-
-    /* AI */
-    .ai-wrap{background:radial-gradient(circle at 70% 20%,rgba(96,165,250,.035),transparent 28%),var(--bg)}
-    .ai-topbar{padding:12px 22px;background:rgba(9,10,11,.82);border-bottom-color:rgba(255,255,255,.07);backdrop-filter:blur(14px)}
-    .ait-status.on{animation:livePulse 2.8s infinite}
-    .ait-btn,.ait-sugg{transition:transform .18s,border-color .18s,background .18s,color .18s}
-    .ait-btn:hover:not(:disabled),.ait-sugg:hover{transform:translateY(-1px)}
-    .ait-sugg{background:#121519;border-color:#292f36}
-    .ait-sugg:hover{background:#1a1e23;border-color:#3a424c;color:#e0e4e8}
-    .chat-msgs{padding:28px;background:radial-gradient(circle at 50% 10%,rgba(96,165,250,.025),transparent 30%)}
-    .chat-empty{padding:34px 42px;border:1px solid rgba(255,255,255,.055);border-radius:18px;background:rgba(18,20,23,.5);box-shadow:0 18px 55px rgba(0,0,0,.16)}
-    .ce-t{color:#aeb6bf;font-size:18px}.ce-s{color:#58616b}
-    .bub{box-shadow:0 8px 28px rgba(0,0,0,.12);animation:cardIn .24s ease both}
-    .bu{background:linear-gradient(180deg,#1d2228,#181c21);border-color:#2c333b;color:#edf0f2}
-    .bb{background:linear-gradient(180deg,#15191d,#111417);border-color:#272e35}
-    .chat-bar{padding:15px 22px;background:rgba(9,10,11,.84);backdrop-filter:blur(14px)}
-    .chat-in{min-height:42px;background:#101316;border-color:#292f36}
-    .chat-send{width:42px;height:42px;background:linear-gradient(180deg,#1b2025,#15191d);transition:.18s}
-    .chat-send:not(:disabled):hover{transform:translateY(-1px) scale(1.02);background:#222830;color:#fff}
-
-    /* Admin */
-    .adm-title{font-size:21px}.adm-sub{color:#69727d}
-    .adm-refresh{background:linear-gradient(180deg,#1b2025,#15191d);border-color:#2b323a;transition:.18s}
-    .adm-refresh:hover:not(:disabled){transform:translateY(-1px);background:#20262c;border-color:#3a424b}
-    .adm-kpis{box-shadow:var(--shadow)}
-    .adm-kpi{background:linear-gradient(180deg,#121518,#0f1113);transition:.2s}
-    .adm-kpi:hover{transform:translateY(-2px);background:linear-gradient(180deg,#161a1e,#111417)}
-    .adm-kpi-green{background:linear-gradient(180deg,#0d1a11,#0a140d)}
-    .adm-card{background:linear-gradient(180deg,#121519,#0f1215);border-color:rgba(255,255,255,.075);box-shadow:0 14px 38px rgba(0,0,0,.18)}
-    .adm-card-head,.adm-tbl th{background:#111417}
-    .adm-tbl th{position:sticky;top:0;z-index:1}
-    .adm-tbl tbody tr:hover td{background:#181c21}
-    .adm-row-online td{background:rgba(10,30,17,.55)}
-    .adm-del{transition:.18s}.adm-del:hover{transform:scale(1.08)}
-
-    /* Inputs / focus */
-    .din,.ctl,.pw-in,.cat-sel,.cat-custom-in,.chat-in{box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
-    button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid rgba(96,165,250,.55);outline-offset:2px}
-
-    /* CHAT FIX: keep the composer visible and let only the message list scroll */
-    .main{min-height:0}
-    .ai-wrap{min-height:0!important;height:auto;overflow:hidden!important}
-    .ai-chat{min-height:0!important;height:auto;overflow:hidden}
-    .chat-msgs{
-      min-height:0!important;
-      height:auto;
-      flex:1 1 auto!important;
-      overflow-y:auto!important;
-      overflow-x:hidden!important;
-      overscroll-behavior:contain;
-      -webkit-overflow-scrolling:touch;
-    }
-    .chat-bar{
-      position:relative;
-      z-index:3;
-      flex:0 0 auto!important;
-      min-height:70px;
-    }
-    .chat-in{min-width:0}
-    @media(max-width:768px){
-      .ai-wrap,.ai-chat{min-height:0!important}
-      .chat-msgs{min-height:0!important}
-      .chat-bar{min-height:62px}
-    }
-
-    /* Responsive */
-    @media(max-width:1000px){
-      .page{padding:22px}.grid{gap:14px}.card{padding:17px}.kpi{padding:16px}.kn{font-size:23px}
-    }
-    @media(max-width:768px){
-      .page{padding:16px}.bar{height:54px;padding:0 14px}
-      .sidebar{width:270px;min-width:270px;left:-270px}.sidebar.open{left:0}
-      .grid{grid-template-columns:1fr}.card.wide{grid-column:1}
-      .kpis{grid-template-columns:repeat(2,1fr)}.kpi:last-child{grid-column:1/-1}
-      .pie-wrap{flex-direction:column;align-items:stretch}
-      .txn-bar{align-items:stretch}.txn-tools{width:100%}
-      .ctl{flex:1;min-width:0}.ctl-search{min-width:140px}
-      .tbl-box,.adm-card{overflow-x:auto}.tbl{min-width:760px}.adm-tbl{min-width:780px}
-      .ai-topbar{padding:10px 14px}.ai-status-row{flex-wrap:wrap}
-      .chat-msgs{padding:16px}.bub{max-width:88%}.chat-bar{padding:10px}
-      .chat-empty{padding:24px 18px}.adm-title{font-size:18px}
-    }
-    @media(max-width:480px){
-      .auth-box{padding:28px 22px;border-radius:18px}
-      .kpis{grid-template-columns:1fr}.kpi:last-child{grid-column:auto}
-      .empty-box h2{font-size:19px}.empty-acts{flex-direction:column}
-      .btn-w,.btn-o{width:100%}.ai-suggestions{overflow-x:auto;flex-wrap:nowrap;padding-bottom:3px}
-      .ait-sugg{flex:0 0 auto}
-    }
-    @media(prefers-reduced-motion:reduce){
-      *,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-    }
-
   `]
 })
 export class AppComponent implements OnInit {
@@ -1140,6 +1053,21 @@ export class AppComponent implements OnInit {
   adminUsers: any[] = [];
   adminLoading = false;
   _adminTimer: any = null;
+  // About
+  aboutContent: any = {};
+  aboutLoading = false;
+  editingAbout = false;
+  aboutEdit: any = {};
+  // Suggestions
+  suggestions2: any[] = [];
+  showSuggestionForm = false;
+  suggTitle = '';
+  suggMsg = '';
+  suggSent = false;
+  suggErr = '';
+  // Admin suggestions
+  adminSuggestions: any[] = [];
+  showAdminSugg = false;
   showChangePw = false;
   pwCurrent = ''; pwNew = ''; pwConfirm = '';
   pwMsg = ''; pwOk = false;
@@ -1290,6 +1218,7 @@ export class AppComponent implements OnInit {
     this.loadCategories();
     // Recalculate chart sizes after DOM is ready
     setTimeout(() => this.onResize(), 100);
+    this.loadAbout();
   }
 
   loadCategories() {
@@ -1300,7 +1229,7 @@ export class AppComponent implements OnInit {
   }
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
-  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat'} as any)[this.tab]||''; }
+  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat',about:'About',admin:'Admin'} as any)[this.tab]||''; }
   go(t: string) {
     if (t !== 'admin') clearTimeout((this as any)._adminTimer);
     this.tab = t;
@@ -1624,6 +1553,74 @@ export class AppComponent implements OnInit {
       next: (r) => { this.adminUsers = r.users || []; this.adminLoading = false; },
       error: () => { this.adminLoading = false; }
     });
+  }
+
+
+  // ── ABOUT ──────────────────────────────────────────────────────────────────
+  loadAbout() {
+    this.aboutLoading = true;
+    this.http.get<any>(`${this.api}/about`).subscribe({
+      next: (r) => { this.aboutContent = r; this.aboutLoading = false; },
+      error: () => { this.aboutLoading = false; }
+    });
+  }
+
+  aboutBodyHtml(): string {
+    const body = this.aboutContent.about_body || '';
+    return body
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^• (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/^/, '<p>')
+      .replace(/$/, '</p>');
+  }
+
+  startEditAbout() {
+    this.aboutEdit    = { ...this.aboutContent };
+    this.editingAbout = true;
+  }
+
+  saveAbout() {
+    this.http.put<any>(`${this.api}/about`, this.aboutEdit,
+      { headers: this.getHeaders() }).subscribe({
+      next: (r) => {
+        this.aboutContent = r;
+        this.editingAbout = false;
+        this.showToast('About page updated');
+      },
+      error: () => this.showToast('Save failed', false)
+    });
+  }
+
+  // ── SUGGESTIONS ────────────────────────────────────────────────────────────
+  submitSuggestion() {
+    this.suggErr = '';
+    if (!this.suggTitle.trim() || !this.suggMsg.trim()) {
+      this.suggErr = 'Please fill in both fields.'; return;
+    }
+    this.http.post<any>(`${this.api}/suggestions`,
+      { title: this.suggTitle, message: this.suggMsg },
+      { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.suggSent = true;
+        this.suggTitle = ''; this.suggMsg = '';
+      },
+      error: () => { this.suggErr = 'Failed to send. Please try again.'; }
+    });
+  }
+
+  loadAdminSuggestions() {
+    this.http.get<any>(`${this.api}/admin/suggestions`,
+      { headers: this.getHeaders() }).subscribe({
+      next: (r) => { this.adminSuggestions = r.suggestions || []; },
+      error: () => {}
+    });
+  }
+
+  updateSuggStatus(s: any) {
+    this.http.patch(`${this.api}/admin/suggestions/${s.id}`,
+      { status: s.status }, { headers: this.getHeaders() }).subscribe();
   }
 
   private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}

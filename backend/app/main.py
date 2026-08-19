@@ -19,7 +19,7 @@ from .auth import (UserDB, hash_pw, verify_pw, create_token,
                    get_current_user, require_user, require_admin)
 from . import rag_service
 
-app = FastAPI(title="Transaction Analyzer")
+app = FastAPI(title="UPI Transaction Analyzer")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -633,6 +633,87 @@ def admin_delete_user(user_id: int, db: Session = Depends(get_db),
         raise HTTPException(400, "Cannot delete yourself")
     db.query(TransactionDB).filter(TransactionDB.user_id == str(user_id)).delete()
     db.delete(user)
+    db.commit()
+    return {"ok": True}
+
+
+
+# ── ABOUT / SITE CONTENT ──────────────────────────────────────────────────────
+
+def _seed_about(db):
+    defaults = {'about_title': 'UPI Transaction Analyzer', 'about_subtitle': 'Your personal finance dashboard — built for clarity', 'about_body': 'Track, analyze and understand your UPI spending across months.\n\nUpload statements from PhonePe, Google Pay, or SuperMoney and instantly see where your money goes — broken down by category, merchant, and time period.\n\n**Key features:**\n• Multi-format import: PhonePe, GPay, SuperMoney CSV and PDF\n• Persistent storage — upload once, access forever\n• Date range filtering and combined analytics across months\n• AI-powered chat (Groq) to ask questions about your spending\n• Category editing and analytics toggle per transaction\n• Secure — your data never leaves the server unmasked\n\n**How to use:**\n1. Create an account and sign in\n2. Upload your bank statement CSV or PDF\n3. Explore Overview and Analytics tabs\n4. Ask the AI anything about your spending\n5. Upload more statements later — data combines automatically\n\n**Made by:** Abdul (23f1002504)', 'about_version': 'v2.0 — July 2026'}
+    for key, value in defaults.items():
+        if not db.query(SiteContent).filter(SiteContent.key == key).first():
+            db.add(SiteContent(key=key, value=value))
+    db.commit()
+
+
+@app.get("/api/about")
+def get_about(db: Session = Depends(get_db)):
+    """Public — no auth needed."""
+    rows = db.query(SiteContent).all()
+    return {r.key: r.value for r in rows}
+
+
+@app.put("/api/about")
+def update_about(data: dict, db: Session = Depends(get_db),
+                 admin = Depends(require_admin)):
+    for key, value in data.items():
+        row = db.query(SiteContent).filter(SiteContent.key == key).first()
+        if row:
+            row.value = str(value)
+            row.updated_at = datetime.utcnow()
+            row.updated_by = admin.id
+        else:
+            db.add(SiteContent(key=key, value=str(value), updated_by=admin.id))
+    db.commit()
+    rows = db.query(SiteContent).all()
+    return {r.key: r.value for r in rows}
+
+
+# ── SUGGESTIONS ───────────────────────────────────────────────────────────────
+
+class SuggestionReq(BaseModel):
+    title:   str
+    message: str
+
+
+@app.post("/api/suggestions")
+def submit_suggestion(req: SuggestionReq, db: Session = Depends(get_db),
+                      user = Depends(get_current_user)):
+    if not req.title.strip() or not req.message.strip():
+        raise HTTPException(400, "Title and message required")
+    s = Suggestion(
+        user_id    = user.id    if user else None,
+        user_name  = user.name  if user else "Anonymous",
+        user_email = user.email if user else None,
+        title      = req.title.strip()[:120],
+        message    = req.message.strip()[:1000],
+    )
+    db.add(s); db.commit()
+    return {"ok": True, "id": s.id}
+
+
+@app.get("/api/admin/suggestions")
+def get_suggestions(db: Session = Depends(get_db), admin = Depends(require_admin)):
+    rows = db.query(Suggestion).order_by(Suggestion.created_at.desc()).all()
+    return {"suggestions": [{
+        "id":         r.id,
+        "user_name":  r.user_name,
+        "user_email": r.user_email,
+        "title":      r.title,
+        "message":    r.message,
+        "status":     r.status,
+        "created_at": r.created_at.isoformat(),
+    } for r in rows]}
+
+
+@app.patch("/api/admin/suggestions/{sid}")
+def update_suggestion(sid: int, data: dict, db: Session = Depends(get_db),
+                      admin = Depends(require_admin)):
+    s = db.query(Suggestion).filter(Suggestion.id == sid).first()
+    if not s: raise HTTPException(404, "Not found")
+    if "status" in data: s.status = data["status"]
     db.commit()
     return {"ok": True}
 

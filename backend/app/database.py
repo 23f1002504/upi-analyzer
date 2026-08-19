@@ -32,6 +32,29 @@ class TransactionDB(Base):
     __table_args__ = (Index("ix_user_date", "user_id", "date"),)
 
 
+
+class SiteContent(Base):
+    """Editable site content — admin can update via dashboard."""
+    __tablename__ = "site_content"
+    id         = Column(Integer, primary_key=True)
+    key        = Column(String, unique=True, nullable=False)  # e.g. "about_title"
+    value      = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(Integer, nullable=True)  # user id
+
+
+class Suggestion(Base):
+    """User suggestions submitted from About tab."""
+    __tablename__ = "suggestions"
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    user_id    = Column(Integer, nullable=True)
+    user_name  = Column(String, nullable=True)
+    user_email = Column(String, nullable=True)
+    title      = Column(String, nullable=False)
+    message    = Column(String, nullable=False)
+    status     = Column(String, default="new")  # new | reviewed | done
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 def init_db():
     pathlib.Path("./data").mkdir(exist_ok=True)
     from .auth import UserDB  # noqa
