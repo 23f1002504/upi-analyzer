@@ -29,6 +29,15 @@ _parser = UPIPDFParser()
 @app.on_event("startup")
 def startup():
     init_db()
+    db = SessionLocal()
+    try:
+        from .seed_admin import seed
+        seed(db)
+        _seed_about(db)
+    except Exception as e:
+        print(f"Startup seed error: {e}")
+    finally:
+        db.close()
 
 def _safe(obj):
     if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}

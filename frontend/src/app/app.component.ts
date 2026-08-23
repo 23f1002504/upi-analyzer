@@ -124,6 +124,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </button>
       <div class="bar-title">{{ tabLabel() }}</div>
       <div class="bar-right">
+        <span class="trademark">Made by AM</span>
         <div class="toast" [class.tok]="toast.ok" [class.terr]="!toast.ok" *ngIf="toast.msg">{{ toast.msg }}</div>
       </div>
     </header>
@@ -440,7 +441,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
             <h1 class="about-title">{{ aboutContent.about_title || 'UPI Transaction Analyzer' }}</h1>
             <p class="about-sub">{{ aboutContent.about_subtitle }}</p>
           </div>
-          <div class="about-body" [innerHTML]="aboutBodyHtml()"></div>
+          <div class="about-body" [innerText]="aboutContent.about_body || ''"></div>
           <div class="about-version">{{ aboutContent.about_version }}</div>
 
           <div class="about-actions">
@@ -625,8 +626,8 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
 </div>
 </div>
-
   `,
+
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -1030,6 +1031,8 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .adm-sugg-toggle:hover{color:#e0e0e0;border-color:var(--border2)}
     .sugg-status-sel{background:#111;border:1px solid var(--border);color:#aaa;border-radius:5px;padding:3px 6px;font-size:11px;outline:none}
 
+    .trademark{font-size:10px;color:#2a2a2a;letter-spacing:.5px;font-weight:500;margin-right:8px;user-select:none}
+
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -1234,9 +1237,8 @@ export class AppComponent implements OnInit {
     if (t !== 'admin') clearTimeout((this as any)._adminTimer);
     this.tab = t;
     this.sidebarOpen = false;
-    if (t === 'admin') {
-      this.loadAdminData();
-    }
+    if (t === 'admin') this.loadAdminData();
+    if (t === 'about' && !this.aboutContent.about_title) this.loadAbout();
   }
   pct(v: number, total: number) { return total > 0 ? (v / total) * 100 : 0; }
   autoType(e: any) { return (e.target?.files?.[0]?.name||'').endsWith('.pdf') ? 'pdf' : 'csv'; }
