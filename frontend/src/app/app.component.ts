@@ -69,11 +69,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         AI Chat
         <span class="sb-online" *ngIf="ollamaOk"></span>
       </button>
-      <button class="sb-lnk" [class.on]="tab==='about'" (click)="go('about')">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        About
-      </button>
-      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin')" *ngIf="isAdmin">
+      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin'); loadAdminData()" *ngIf="isAdmin">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Admin
         <span class="sb-badge-red" *ngIf="adminStats?.online_now">{{ adminStats?.online_now }}</span>
@@ -124,7 +120,6 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </button>
       <div class="bar-title">{{ tabLabel() }}</div>
       <div class="bar-right">
-        <span class="trademark">Made by AM</span>
         <div class="toast" [class.tok]="toast.ok" [class.terr]="!toast.ok" *ngIf="toast.msg">{{ toast.msg }}</div>
       </div>
     </header>
@@ -429,80 +424,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </div>
     </div>
 
-    
-    <!-- ABOUT TAB -->
-    <main class="page" *ngIf="tab==='about'">
-      <div class="about-wrap" *ngIf="!aboutLoading">
-
-        <!-- View mode -->
-        <div class="about-content" *ngIf="!editingAbout">
-          <div class="about-hero">
-            <div class="about-logo">₹</div>
-            <h1 class="about-title">{{ aboutContent.about_title || 'UPI Transaction Analyzer' }}</h1>
-            <p class="about-sub">{{ aboutContent.about_subtitle }}</p>
-          </div>
-          <div class="about-body" [innerText]="aboutContent.about_body || ''"></div>
-          <div class="about-version">{{ aboutContent.about_version }}</div>
-
-          <div class="about-actions">
-            <button class="about-sugg-btn" (click)="showSuggestionForm=!showSuggestionForm">
-              💡 {{ showSuggestionForm ? 'Close' : 'Send a suggestion' }}
-            </button>
-            <button class="about-edit-btn" *ngIf="isAdmin" (click)="startEditAbout()">
-              ✎ Edit content
-            </button>
-          </div>
-
-          <!-- Suggestion form -->
-          <div class="sugg-form" *ngIf="showSuggestionForm">
-            <div class="sugg-title-row">
-              <div class="sugg-heading">Got an idea? We'd love to hear it.</div>
-            </div>
-            <div *ngIf="suggSent" class="sugg-sent">
-              ✓ Thanks! Your suggestion has been sent.
-            </div>
-            <div *ngIf="!suggSent">
-              <input class="sugg-in" [(ngModel)]="suggTitle"
-                     placeholder="Short title (e.g. Add dark mode)" maxlength="120">
-              <textarea class="sugg-ta" [(ngModel)]="suggMsg"
-                        placeholder="Describe your idea in detail…" rows="4" maxlength="1000"></textarea>
-              <div class="sugg-err" *ngIf="suggErr">{{ suggErr }}</div>
-              <button class="sugg-submit" (click)="submitSuggestion()">Submit suggestion</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Edit mode (admin only) -->
-        <div class="about-edit-panel" *ngIf="editingAbout && isAdmin">
-          <div class="edit-head">
-            <div class="edit-title">Edit About Page</div>
-            <div class="edit-actions">
-              <button class="edit-save" (click)="saveAbout()">Save changes</button>
-              <button class="edit-cancel" (click)="editingAbout=false">Cancel</button>
-            </div>
-          </div>
-          <div class="edit-field">
-            <label>Title</label>
-            <input class="edit-in" [(ngModel)]="aboutEdit.about_title">
-          </div>
-          <div class="edit-field">
-            <label>Subtitle</label>
-            <input class="edit-in" [(ngModel)]="aboutEdit.about_subtitle">
-          </div>
-          <div class="edit-field">
-            <label>Body (markdown-ish: **bold**, bullet points)</label>
-            <textarea class="edit-ta" [(ngModel)]="aboutEdit.about_body" rows="14"></textarea>
-          </div>
-          <div class="edit-field">
-            <label>Version / footer</label>
-            <input class="edit-in" [(ngModel)]="aboutEdit.about_version">
-          </div>
-        </div>
-
-      </div>
-    </main>
-
-    <!-- ADMIN TAB -->
+        <!-- ADMIN TAB -->
     <main class="page" *ngIf="tab==='admin' && isAdmin">
 
       <div class="adm-header">
@@ -584,42 +506,6 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
             </tr>
           </tbody>
         </table>
-      </div>
-
-
-      <!-- Suggestions -->
-      <div class="adm-card" style="margin-top:16px" *ngIf="tab==='admin'">
-        <div class="adm-card-head">
-          User Suggestions
-          <span class="adm-online-badge" *ngIf="adminSuggestions.length">{{ adminSuggestions.length }}</span>
-          <button class="adm-sugg-toggle" (click)="loadAdminSuggestions(); showAdminSugg=!showAdminSugg">
-            {{ showAdminSugg ? 'Hide' : 'View suggestions' }}
-          </button>
-        </div>
-        <div *ngIf="showAdminSugg">
-          <div *ngIf="!adminSuggestions.length" class="adm-empty">No suggestions yet.</div>
-          <table class="adm-tbl" *ngIf="adminSuggestions.length">
-            <thead><tr>
-              <th>From</th><th>Title</th><th>Message</th><th>Date</th><th>Status</th>
-            </tr></thead>
-            <tbody>
-              <tr *ngFor="let s of adminSuggestions">
-                <td class="adm-email">{{ s.user_name }}<br><small>{{ s.user_email }}</small></td>
-                <td class="adm-name">{{ s.title }}</td>
-                <td class="adm-dim" style="max-width:300px;white-space:pre-wrap">{{ s.message }}</td>
-                <td class="adm-dim">{{ s.created_at | date:'d MMM' }}</td>
-                <td>
-                  <select class="sugg-status-sel" [(ngModel)]="s.status"
-                          (change)="updateSuggStatus(s)">
-                    <option value="new">New</option>
-                    <option value="reviewed">Reviewed</option>
-                    <option value="done">Done</option>
-                  </select>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </div>
 
     </main>
@@ -983,56 +869,6 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
     .adm-del{background:none;border:none;color:#2a1515;cursor:pointer;font-size:14px;padding:3px 8px;border-radius:5px;transition:all .15s}
     .adm-del:hover{background:#1f0a0a;color:#f87171}
 
-
-    /* ── About tab ── */
-    .about-wrap{max-width:720px;margin:0 auto}
-    .about-hero{text-align:center;padding:40px 0 32px;border-bottom:1px solid var(--border);margin-bottom:32px}
-    .about-logo{width:64px;height:64px;background:#fff;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#0a0a0a;margin:0 auto 16px}
-    .about-title{font-size:26px;font-weight:700;color:#f0f0f0;letter-spacing:-.5px;margin-bottom:8px}
-    .about-sub{font-size:15px;color:#666;line-height:1.6}
-    .about-body{font-size:14px;color:#aaa;line-height:1.8;margin-bottom:24px}
-    .about-body p{margin-bottom:12px}
-    .about-body strong{color:#e0e0e0;font-weight:600}
-    .about-body ul{margin:8px 0 12px 20px}
-    .about-body li{margin-bottom:4px;color:#aaa}
-    .about-version{font-size:11px;color:#333;margin-bottom:24px;text-align:right}
-    .about-actions{display:flex;gap:10px;margin-bottom:24px}
-    .about-sugg-btn{background:#111;border:1px solid var(--border);color:#aaa;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .15s}
-    .about-sugg-btn:hover{border-color:var(--border2);color:#e0e0e0}
-    .about-edit-btn{background:#1a1505;border:1px solid #2a2008;color:#fbbf24;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px}
-    .about-edit-btn:hover{background:#22190a}
-
-    /* Suggestion form */
-    .sugg-form{background:#111;border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:8px}
-    .sugg-heading{font-size:15px;font-weight:600;color:#e0e0e0;margin-bottom:16px}
-    .sugg-in{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;margin-bottom:10px;font-family:inherit}
-    .sugg-in:focus{border-color:var(--border2)}
-    .sugg-ta{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;resize:vertical;font-family:inherit;margin-bottom:10px}
-    .sugg-ta:focus{border-color:var(--border2)}
-    .sugg-err{color:#f87171;font-size:12px;margin-bottom:8px}
-    .sugg-sent{color:#4ade80;font-size:14px;padding:16px 0}
-    .sugg-submit{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:8px;padding:10px 22px;font-size:13px;font-weight:600;cursor:pointer}
-    .sugg-submit:hover{background:#ddd}
-
-    /* About edit panel */
-    .about-edit-panel{background:#111;border:1px solid var(--border);border-radius:12px;padding:24px}
-    .edit-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
-    .edit-title{font-size:16px;font-weight:600;color:#f0f0f0}
-    .edit-actions{display:flex;gap:8px}
-    .edit-save{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer}
-    .edit-cancel{background:#1a1a1a;color:#888;border:1px solid var(--border);border-radius:7px;padding:8px 18px;font-size:13px;cursor:pointer}
-    .edit-field{margin-bottom:16px}
-    .edit-field label{display:block;font-size:11px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-    .edit-in{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;font-family:inherit}
-    .edit-ta{width:100%;background:#0d0d0d;border:1px solid var(--border);color:#e0e0e0;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;resize:vertical;font-family:inherit}
-
-    /* Admin suggestions */
-    .adm-sugg-toggle{margin-left:auto;background:#141414;border:1px solid var(--border);color:#888;padding:4px 12px;border-radius:5px;cursor:pointer;font-size:11px}
-    .adm-sugg-toggle:hover{color:#e0e0e0;border-color:var(--border2)}
-    .sugg-status-sel{background:#111;border:1px solid var(--border);color:#aaa;border-radius:5px;padding:3px 6px;font-size:11px;outline:none}
-
-    .trademark{font-size:10px;color:#2a2a2a;letter-spacing:.5px;font-weight:500;margin-right:8px;user-select:none}
-
     @media(max-width:768px){
       .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
       .sidebar.open{left:0}
@@ -1056,21 +892,6 @@ export class AppComponent implements OnInit {
   adminUsers: any[] = [];
   adminLoading = false;
   _adminTimer: any = null;
-  // About
-  aboutContent: any = {};
-  aboutLoading = false;
-  editingAbout = false;
-  aboutEdit: any = {};
-  // Suggestions
-  suggestions2: any[] = [];
-  showSuggestionForm = false;
-  suggTitle = '';
-  suggMsg = '';
-  suggSent = false;
-  suggErr = '';
-  // Admin suggestions
-  adminSuggestions: any[] = [];
-  showAdminSugg = false;
   showChangePw = false;
   pwCurrent = ''; pwNew = ''; pwConfirm = '';
   pwMsg = ''; pwOk = false;
@@ -1221,7 +1042,6 @@ export class AppComponent implements OnInit {
     this.loadCategories();
     // Recalculate chart sizes after DOM is ready
     setTimeout(() => this.onResize(), 100);
-    this.loadAbout();
   }
 
   loadCategories() {
@@ -1232,13 +1052,14 @@ export class AppComponent implements OnInit {
   }
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
-  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat',about:'About',admin:'Admin'} as any)[this.tab]||''; }
+  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat'} as any)[this.tab]||''; }
   go(t: string) {
     if (t !== 'admin') clearTimeout((this as any)._adminTimer);
     this.tab = t;
     this.sidebarOpen = false;
-    if (t === 'admin') this.loadAdminData();
-    if (t === 'about' && !this.aboutContent.about_title) this.loadAbout();
+    if (t === 'admin') {
+      this.loadAdminData();
+    }
   }
   pct(v: number, total: number) { return total > 0 ? (v / total) * 100 : 0; }
   autoType(e: any) { return (e.target?.files?.[0]?.name||'').endsWith('.pdf') ? 'pdf' : 'csv'; }
@@ -1555,74 +1376,6 @@ export class AppComponent implements OnInit {
       next: (r) => { this.adminUsers = r.users || []; this.adminLoading = false; },
       error: () => { this.adminLoading = false; }
     });
-  }
-
-
-  // ── ABOUT ──────────────────────────────────────────────────────────────────
-  loadAbout() {
-    this.aboutLoading = true;
-    this.http.get<any>(`${this.api}/about`).subscribe({
-      next: (r) => { this.aboutContent = r; this.aboutLoading = false; },
-      error: () => { this.aboutLoading = false; }
-    });
-  }
-
-  aboutBodyHtml(): string {
-    const body = this.aboutContent.about_body || '';
-    return body
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/^• (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/^/, '<p>')
-      .replace(/$/, '</p>');
-  }
-
-  startEditAbout() {
-    this.aboutEdit    = { ...this.aboutContent };
-    this.editingAbout = true;
-  }
-
-  saveAbout() {
-    this.http.put<any>(`${this.api}/about`, this.aboutEdit,
-      { headers: this.getHeaders() }).subscribe({
-      next: (r) => {
-        this.aboutContent = r;
-        this.editingAbout = false;
-        this.showToast('About page updated');
-      },
-      error: () => this.showToast('Save failed', false)
-    });
-  }
-
-  // ── SUGGESTIONS ────────────────────────────────────────────────────────────
-  submitSuggestion() {
-    this.suggErr = '';
-    if (!this.suggTitle.trim() || !this.suggMsg.trim()) {
-      this.suggErr = 'Please fill in both fields.'; return;
-    }
-    this.http.post<any>(`${this.api}/suggestions`,
-      { title: this.suggTitle, message: this.suggMsg },
-      { headers: this.getHeaders() }).subscribe({
-      next: () => {
-        this.suggSent = true;
-        this.suggTitle = ''; this.suggMsg = '';
-      },
-      error: () => { this.suggErr = 'Failed to send. Please try again.'; }
-    });
-  }
-
-  loadAdminSuggestions() {
-    this.http.get<any>(`${this.api}/admin/suggestions`,
-      { headers: this.getHeaders() }).subscribe({
-      next: (r) => { this.adminSuggestions = r.suggestions || []; },
-      error: () => {}
-    });
-  }
-
-  updateSuggStatus(s: any) {
-    this.http.patch(`${this.api}/admin/suggestions/${s.id}`,
-      { status: s.status }, { headers: this.getHeaders() }).subscribe();
   }
 
   private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
