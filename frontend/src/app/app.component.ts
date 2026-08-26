@@ -958,9 +958,13 @@ export class AppComponent implements OnInit {
     'How much did I receive vs spend?',
   ];
 
-  private api = window.location.hostname === 'localhost'
-    ? 'http://localhost:8000/api'
-    : 'https://upi-analyzer-production-28c7.up.railway.app/api';
+  private api = (() => {
+    if (window.location.hostname === 'localhost') return 'http://localhost:8000/api';
+    // Read from meta tag set by Vercel env var, or fallback to hardcoded
+    const meta = document.querySelector('meta[name="api-url"]') as HTMLMetaElement;
+    if (meta?.content) return meta.content;
+    return 'https://upi-analyzer.onrender.com/api';
+  })();
 
   constructor(private http: HttpClient) {}
 
