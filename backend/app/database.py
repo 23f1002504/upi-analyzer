@@ -26,7 +26,7 @@ Base = declarative_base()
 class TransactionDB(Base):
     __tablename__ = "transactions"
     id               = Column(Integer, primary_key=True, autoincrement=True)
-    user_id          = Column(String, nullable=True, index=True)
+    user_id          = Column(Integer, nullable=True, index=True)
     date             = Column(DateTime, nullable=False, index=True)
     time             = Column(String, default="00:00")
     amount           = Column(Float, nullable=False)

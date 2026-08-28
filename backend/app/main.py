@@ -16,7 +16,7 @@ from .analytics import AnalyticsEngine
 from .models import Transaction
 from .database import init_db, get_db, TransactionDB, SessionLocal, SiteContent, Suggestion
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user, require_admin)
+                   get_current_user, require_user)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -26,56 +26,9 @@ app.add_middleware(
 
 _parser = UPIPDFParser()
 
-
-# ── Default about content ─────────────────────────────────────────────────────
-_DEFAULT_ABOUT = {
-    "about_title":    "UPI Transaction Analyzer",
-    "about_subtitle": "Your personal finance dashboard — built for clarity",
-    "about_body":     """Track, analyze and understand your UPI spending across months.
-
-Upload statements from PhonePe, Google Pay, or SuperMoney and instantly see where your money goes — broken down by category, merchant, and time period.
-
-Key features:
-• Multi-format import: PhonePe, GPay, SuperMoney CSV and PDF
-• Persistent storage — upload once, access forever
-• Date range filtering and combined analytics across months
-• AI-powered chat (Groq) for spending questions
-• Category editing and analytics toggle per transaction
-• Secure — raw data never leaves the server
-
-How to use:
-1. Create an account and sign in
-2. Upload your bank statement CSV or PDF
-3. Explore Overview and Analytics tabs
-4. Ask the AI anything about your spending
-5. Upload more statements later — data combines automatically
-
-Made by: AM (23f1002504)""",
-    "about_version": "v2.0 — August 2026",
-}
-
-def _seed_about(db):
-    for key, value in _DEFAULT_ABOUT.items():
-        if not db.query(SiteContent).filter(SiteContent.key == key).first():
-            db.add(SiteContent(key=key, value=value))
-    db.commit()
-
-
 @app.on_event("startup")
 def startup():
     init_db()
-    db = SessionLocal()
-    try:
-        from .seed_admin import seed
-        seed(db)
-    except Exception as e:
-        print(f"Admin seed error: {e}")
-    try:
-        _seed_about(db)
-    except Exception as e:
-        print(f"About seed error: {e}")
-    finally:
-        db.close()
 
 def _safe(obj):
     if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}
@@ -109,11 +62,11 @@ def _dedup_insert(db, rows, source, user_id=None):
             TransactionDB.date == dt,
             TransactionDB.merchant == r["merchant"],
             TransactionDB.amount == r["amount"],
-            TransactionDB.user_id == user_id,
+            TransactionDB.user_id == (int(user_id) if user_id is not None else None),
         ).first()
         if exists: skipped += 1; continue
         db.add(TransactionDB(
-            user_id=user_id, date=dt, time=r.get("time","00:00"),
+            user_id=int(user_id) if user_id is not None else None, date=dt, time=r.get("time","00:00"),
             amount=r["amount"], transaction_type=r["transaction_type"],
             merchant=r["merchant"], category=r.get("category","Other"),
             note=r.get("note",""), cashback=r.get("cashback",0.0), source_file=source,
@@ -303,7 +256,7 @@ def _parse_phonepay_csv(content: bytes) -> list[dict]:
 
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
     q = db.query(TransactionDB)
-    if user_id: q = q.filter(TransactionDB.user_id == str(user_id))
+    if user_id is not None: q = q.filter(TransactionDB.user_id == int(user_id))
     if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
     if date_to:
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
@@ -358,8 +311,8 @@ async def upload_pdf(file: UploadFile = File(...),
     txns = _parser.parse_pdf(io.BytesIO(await file.read()))
     rows = [{**t.model_dump(), 'date': t.date.isoformat()} for t in txns]
     uid  = user.id if user else None
-    ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
+    ins, skp = _dedup_insert(db, rows, file.filename, int(uid) if uid else None)
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == (int(uid) if uid else None)).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 @app.post("/api/upload-csv")
@@ -414,8 +367,8 @@ async def upload_csv(file: UploadFile = File(...),
             except: continue
     if not rows: raise HTTPException(400, "Could not parse CSV")
     uid = user.id if user else None
-    ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
+    ins, skp = _dedup_insert(db, rows, file.filename, int(uid) if uid else None)
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == (int(uid) if uid else None)).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 
@@ -432,7 +385,7 @@ def get_transactions(date_from:str=None, date_to:str=None,
 def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB)
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid is not None: q = q.filter(TransactionDB.user_id == int(uid))
     q.delete(); db.commit()
     return {"cleared": True}
 
@@ -451,7 +404,7 @@ def analytics(date_from:str=None, date_to:str=None,
 def date_range(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date), func.count(TransactionDB.id))
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid is not None: q = q.filter(TransactionDB.user_id == int(uid))
     row = q.first()
     return {"min": row[0].date().isoformat() if row[0] else None,
             "max": row[1].date().isoformat() if row[1] else None, "count": row[2]}
@@ -493,7 +446,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
                        db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB).filter(TransactionDB.id == txn_id)
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid is not None: q = q.filter(TransactionDB.user_id == int(uid))
     t = q.first()
     if not t: raise HTTPException(404, "Transaction not found")
 
@@ -514,7 +467,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
 def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid is not None: q = q.filter(TransactionDB.user_id == int(uid))
     custom = list({r[0] for r in q.all() if r[0]})
 
     default = ['Credit Card','Healthcare','Travel','Shopping','Food & Grocery',
@@ -547,68 +500,9 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
         })
     ins, skp = _dedup_insert(db, rows, "sms", uid)
     total = db.query(TransactionDB).filter(
-        TransactionDB.user_id == (str(uid) if uid else None)
+        TransactionDB.user_id == (int(uid) if uid else None)
     ).count()
     return {"inserted": ins, "skipped": skp, "total_stored": total}
-
-
-
-# ── ABOUT / SITE CONTENT ──────────────────────────────────────────────────────
-@app.get("/api/about")
-def get_about(db: Session = Depends(get_db)):
-    rows = db.query(SiteContent).all()
-    return {r.key: r.value for r in rows} if rows else _DEFAULT_ABOUT
-
-@app.put("/api/about")
-def update_about(data: dict, db: Session = Depends(get_db), admin = Depends(require_admin)):
-    for key, value in data.items():
-        row = db.query(SiteContent).filter(SiteContent.key == key).first()
-        if row:
-            row.value = str(value)
-            row.updated_at = datetime.utcnow()
-        else:
-            db.add(SiteContent(key=key, value=str(value)))
-    db.commit()
-    rows = db.query(SiteContent).all()
-    return {r.key: r.value for r in rows}
-
-# ── SUGGESTIONS ───────────────────────────────────────────────────────────────
-class SuggestionReq(BaseModel):
-    title:   str
-    message: str
-
-@app.post("/api/suggestions")
-def submit_suggestion(req: SuggestionReq, db: Session = Depends(get_db),
-                      user = Depends(get_current_user)):
-    if not req.title.strip() or not req.message.strip():
-        raise HTTPException(400, "Title and message required")
-    db.add(Suggestion(
-        user_id    = user.id    if user else None,
-        user_name  = user.name  if user else "Anonymous",
-        user_email = user.email if user else None,
-        title      = req.title.strip()[:120],
-        message    = req.message.strip()[:1000],
-    ))
-    db.commit()
-    return {"ok": True}
-
-@app.get("/api/admin/suggestions")
-def get_suggestions(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    rows = db.query(Suggestion).order_by(Suggestion.created_at.desc()).all()
-    return {"suggestions": [{
-        "id": r.id, "user_name": r.user_name, "user_email": r.user_email,
-        "title": r.title, "message": r.message, "status": r.status,
-        "created_at": r.created_at.isoformat(),
-    } for r in rows]}
-
-@app.patch("/api/admin/suggestions/{sid}")
-def update_suggestion_status(sid: int, data: dict, db: Session = Depends(get_db),
-                              admin = Depends(require_admin)):
-    s = db.query(Suggestion).filter(Suggestion.id == sid).first()
-    if not s: raise HTTPException(404, "Not found")
-    if "status" in data: s.status = data["status"]
-    db.commit()
-    return {"ok": True}
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
