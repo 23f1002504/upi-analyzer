@@ -10,8 +10,8 @@ from typing import Optional
 import pandas as pd
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # loaded at import
+GROQ_MODEL   = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:8b")
@@ -155,18 +155,20 @@ def get_indexed_count(user_id: str) -> int:
 
 # ── LLM calls ─────────────────────────────────────────────────────────────────
 def _call_groq(prompt: str) -> Optional[str]:
-    if not GROQ_API_KEY:
+    key = os.getenv("GROQ_API_KEY", GROQ_API_KEY)
+    model = os.getenv("GROQ_MODEL", GROQ_MODEL)
+    if not key:
         print("GROQ_API_KEY not set")
         return None
     try:
         resp = requests.post(
             GROQ_URL,
             headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type":  "application/json",
             },
             json={
-                "model":       GROQ_MODEL,
+                "model":       model,
                 "messages":    [{"role": "user", "content": prompt}],
                 "max_tokens":  512,
                 "temperature": 0.3,
@@ -178,7 +180,11 @@ def _call_groq(prompt: str) -> Optional[str]:
         print(f"Groq OK — {len(text)} chars")
         return text
     except Exception as e:
+        print(f"Groq error type: {type(e).__name__}")
         print(f"Groq error: {e}")
+        try:
+            print(f"Groq response body: {resp.text[:500]}")
+        except: pass
         return None
 
 
@@ -269,6 +275,11 @@ def query(user_question: str, user_id: str = None,
     safe_q = _mask(user_question)
 
     # ── Step 3: Build prompt ──────────────────────────────────────────────────
+    # Trim lists to keep prompt under ~3000 tokens
+    top_merchants  = top_merchants[:5]
+    recurring      = recurring[:3]
+    largest        = largest[:3]
+
     prompt = f"""You are a personal finance analyst. Give specific, actionable answers. Use Rs. Max 4-5 sentences.
 
 PERIOD: {date_range or "All available data"}
@@ -309,12 +320,16 @@ ANSWER:"""
 
 # ── Status ────────────────────────────────────────────────────────────────────
 def ollama_status() -> dict:
-    if GROQ_MODEL:
+    # Re-read at call time in case env was set after import
+    key = os.getenv("GROQ_API_KEY", GROQ_API_KEY)
+    model = os.getenv("GROQ_MODEL", GROQ_MODEL)
+    print(f"Status check - GROQ key present: {bool(key)}")
+    if key:
         return {
             "running":      True,
-            "active_model": GROQ_MODEL,
+            "active_model": model,
             "provider":     "groq",
-            "models":       [GROQ_MODEL],
+            "models":       [model],
         }
     try:
         resp   = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
