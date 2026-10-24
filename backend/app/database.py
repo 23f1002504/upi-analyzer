@@ -4,29 +4,21 @@ from datetime import datetime
 import os, pathlib
 
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///./data/upi.db")
-
-# Fix Render PostgreSQL URL format (postgres:// → postgresql://)
 if DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
 if "sqlite" in DB_URL:
     engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
 else:
-    engine = create_engine(
-        DB_URL,
-        pool_size=5,
-        max_overflow=10,
-        pool_pre_ping=True,
-    )
+    engine = create_engine(DB_URL, pool_size=5, max_overflow=10, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
 class TransactionDB(Base):
     __tablename__ = "transactions"
     id               = Column(Integer, primary_key=True, autoincrement=True)
-    user_id          = Column(Integer, nullable=True, index=True)
+    user_id          = Column(Integer, nullable=True, index=True)  # INTEGER not VARCHAR
     date             = Column(DateTime, nullable=False, index=True)
     time             = Column(String, default="00:00")
     amount           = Column(Float, nullable=False)
@@ -40,7 +32,6 @@ class TransactionDB(Base):
     included         = Column(Boolean, default=True)
     __table_args__ = (Index("ix_user_date", "user_id", "date"),)
 
-
 class SiteContent(Base):
     __tablename__ = "site_content"
     id         = Column(Integer, primary_key=True)
@@ -48,7 +39,6 @@ class SiteContent(Base):
     value      = Column(String, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(Integer, nullable=True)
-
 
 class Suggestion(Base):
     __tablename__ = "suggestions"
@@ -61,7 +51,6 @@ class Suggestion(Base):
     status     = Column(String, default="new")
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
 def init_db():
     if "sqlite" in DB_URL:
         pathlib.Path("./data").mkdir(exist_ok=True)
@@ -69,26 +58,30 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate()
 
-
 def _migrate():
-    """Safe migration — adds missing columns without data loss."""
     try:
         from sqlalchemy import text, inspect
         with engine.connect() as conn:
             inspector = inspect(engine)
-
             if inspector.has_table('transactions'):
                 existing = [c['name'] for c in inspector.get_columns('transactions')]
-                to_add = [
-                    ("included",        "BOOLEAN DEFAULT TRUE"),
-                    ("custom_category", "VARCHAR"),
-                    ("source_file",     "VARCHAR"),
-                ]
-                for col, defn in to_add:
+                # Add missing columns
+                adds = [("included","BOOLEAN DEFAULT TRUE"),("custom_category","VARCHAR"),("source_file","VARCHAR")]
+                for col, defn in adds:
                     if col not in existing:
                         conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {col} {defn}"))
                         conn.commit()
-
+                # Fix user_id type to INTEGER if it's VARCHAR
+                if "postgresql" in str(engine.url):
+                    try:
+                        conn.execute(text(
+                            "ALTER TABLE transactions ALTER COLUMN user_id TYPE INTEGER "
+                            "USING CASE WHEN user_id ~ '^[0-9]+$' THEN user_id::INTEGER ELSE NULL END"
+                        ))
+                        conn.commit()
+                        print("Migrated user_id to INTEGER")
+                    except Exception as e:
+                        print(f"user_id already INTEGER or migration not needed: {e}")
             if inspector.has_table('users'):
                 user_cols = [c['name'] for c in inspector.get_columns('users')]
                 for col, defn in [("is_admin","BOOLEAN DEFAULT FALSE"),("last_seen","TIMESTAMP")]:
@@ -96,8 +89,7 @@ def _migrate():
                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {defn}"))
                         conn.commit()
     except Exception as e:
-        print(f"Migration note: {e}")
-
+        print(f"Migration: {e}")
 
 def get_db():
     db = SessionLocal()
