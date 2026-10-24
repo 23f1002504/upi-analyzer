@@ -58,39 +58,39 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate()
 
-def _migrate():
-    try:
-        from sqlalchemy import text, inspect
-        with engine.connect() as conn:
-            inspector = inspect(engine)
-            if inspector.has_table('transactions'):
-                existing = [c['name'] for c in inspector.get_columns('transactions')]
-                # Add missing columns
-                adds = [("included","BOOLEAN DEFAULT TRUE"),("custom_category","VARCHAR"),("source_file","VARCHAR")]
-                for col, defn in adds:
-                    if col not in existing:
-                        conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {col} {defn}"))
-                        conn.commit()
-                if "postgresql" in str(engine.url):
-                    try:
-                        conn.execute(text(
-                            "ALTER TABLE transactions ALTER COLUMN user_id TYPE INTEGER "
-                            "USING CASE WHEN user_id ~ '^[0-9]+$' THEN user_id::INTEGER ELSE NULL END"
-                        ))
-                        conn.commit()
-                        print("Migrated user_id to INTEGER")
-                    except Exception as e:
-                        print(f"user_id already INTEGER or migration not needed: {e}")                # user_id is INTEGER by default on fresh DB - skip migration
-                print("user_id type check skipped - INTEGER by default")
+# def _migrate():
+#     try:
+#         from sqlalchemy import text, inspect
+#         with engine.connect() as conn:
+#             inspector = inspect(engine)
+#             if inspector.has_table('transactions'):
+#                 existing = [c['name'] for c in inspector.get_columns('transactions')]
+#                 # Add missing columns
+#                 adds = [("included","BOOLEAN DEFAULT TRUE"),("custom_category","VARCHAR"),("source_file","VARCHAR")]
+#                 for col, defn in adds:
+#                     if col not in existing:
+#                         conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {col} {defn}"))
+#                         conn.commit()
+#                 if "postgresql" in str(engine.url):
+#                     try:
+#                         conn.execute(text(
+#                             "ALTER TABLE transactions ALTER COLUMN user_id TYPE INTEGER "
+#                             "USING CASE WHEN user_id ~ '^[0-9]+$' THEN user_id::INTEGER ELSE NULL END"
+#                         ))
+#                         conn.commit()
+#                         print("Migrated user_id to INTEGER")
+#                     except Exception as e:
+#                         print(f"user_id already INTEGER or migration not needed: {e}")                # user_id is INTEGER by default on fresh DB - skip migration
+#                 print("user_id type check skipped - INTEGER by default")
 
-            if inspector.has_table('users'):
-                user_cols = [c['name'] for c in inspector.get_columns('users')]
-                for col, defn in [("is_admin","BOOLEAN DEFAULT FALSE"),("last_seen","TIMESTAMP")]:
-                    if col not in user_cols:
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {defn}"))
-                        conn.commit()
-    except Exception as e:
-        print(f"Migration: {e}")
+#             if inspector.has_table('users'):
+#                 user_cols = [c['name'] for c in inspector.get_columns('users')]
+#                 for col, defn in [("is_admin","BOOLEAN DEFAULT FALSE"),("last_seen","TIMESTAMP")]:
+#                     if col not in user_cols:
+#                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {defn}"))
+#                         conn.commit()
+#     except Exception as e:
+#         print(f"Migration: {e}")
 
 def get_db():
     db = SessionLocal()
