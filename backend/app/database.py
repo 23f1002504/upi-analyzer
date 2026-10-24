@@ -71,7 +71,6 @@ def _migrate():
                     if col not in existing:
                         conn.execute(text(f"ALTER TABLE transactions ADD COLUMN {col} {defn}"))
                         conn.commit()
-                # Fix user_id type to INTEGER if it's VARCHAR
                 if "postgresql" in str(engine.url):
                     try:
                         conn.execute(text(
@@ -81,7 +80,9 @@ def _migrate():
                         conn.commit()
                         print("Migrated user_id to INTEGER")
                     except Exception as e:
-                        print(f"user_id already INTEGER or migration not needed: {e}")
+                        print(f"user_id already INTEGER or migration not needed: {e}")                # user_id is INTEGER by default on fresh DB - skip migration
+                print("user_id type check skipped - INTEGER by default")
+
             if inspector.has_table('users'):
                 user_cols = [c['name'] for c in inspector.get_columns('users')]
                 for col, defn in [("is_admin","BOOLEAN DEFAULT FALSE"),("last_seen","TIMESTAMP")]:
