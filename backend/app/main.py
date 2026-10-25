@@ -256,14 +256,14 @@ def _parse_phonepay_csv(content: bytes) -> list[dict]:
 
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
     q = db.query(TransactionDB)
-    if user_id: q = q.filter(TransactionDB.user_id == str(user_id))
+    if user_id: q = q.filter(TransactionDB.user_id == user_id)
     if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
     if date_to:
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
         q = q.filter(TransactionDB.date <= datetime.fromisoformat(dt))
     if not all_rows:
         try:
-            q = q.filter(TransactionDB.included != False)
+            q = q.filter((TransactionDB.included == True) | (TransactionDB.included == None))
         except Exception:
             pass  # column may not exist in old DB
     return q.order_by(TransactionDB.date.desc()).all()
@@ -297,6 +297,21 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     token = create_token({"sub": user.email, "uid": user.id})
     return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
 
+
+
+class ChangePwReq(BaseModel):
+    current_password: str
+    new_password: str
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePwReq, db: Session = Depends(get_db),
+                    user = Depends(require_user)):
+    if not verify_pw(req.current_password, user.hashed_pw):
+        raise HTTPException(400, "Current password incorrect")
+    user.hashed_pw = hash_pw(req.new_password)
+    db.commit()
+    return {"ok": True}
+
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
     return {"id": user.id, "email": user.email, "name": user.name}
@@ -312,7 +327,7 @@ async def upload_pdf(file: UploadFile = File(...),
     rows = [{**t.model_dump(), 'date': t.date.isoformat()} for t in txns]
     uid  = user.id if user else None
     ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 @app.post("/api/upload-csv")
@@ -368,7 +383,7 @@ async def upload_csv(file: UploadFile = File(...),
     if not rows: raise HTTPException(400, "Could not parse CSV")
     uid = user.id if user else None
     ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 
@@ -385,7 +400,7 @@ def get_transactions(date_from:str=None, date_to:str=None,
 def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB)
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid: q = q.filter(TransactionDB.user_id == uid)
     q.delete(); db.commit()
     return {"cleared": True}
 
@@ -404,7 +419,7 @@ def analytics(date_from:str=None, date_to:str=None,
 def date_range(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date), func.count(TransactionDB.id))
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid: q = q.filter(TransactionDB.user_id == uid)
     row = q.first()
     return {"min": row[0].date().isoformat() if row[0] else None,
             "max": row[1].date().isoformat() if row[1] else None, "count": row[2]}
@@ -424,9 +439,40 @@ def rag_index(date_from:str=None, date_to:str=None,
     return rag_service.index_transactions([_row(t) for t in txns])
 
 @app.post("/api/rag/query")
-def rag_query(req: RAGReq):
+def rag_query(req: RAGReq, db: Session = Depends(get_db),
+              user = Depends(require_user)):
     if not req.question.strip(): raise HTTPException(400, "Empty")
-    return rag_service.query(req.question)
+    uid = user.id
+    txns = _query(db, uid, all_rows=False)
+    if not txns:
+        return {"answer": "No transactions found. Upload a CSV first.",
+                "sources": [], "provider": "none"}
+    from .analytics import AnalyticsEngine
+    from .models import Transaction
+    objs = [Transaction(
+        date=t.date, time=t.time, amount=t.amount,
+        transaction_type=t.transaction_type, merchant=t.merchant,
+        category=getattr(t,"custom_category",None) or t.category,
+        note=t.note, cashback=t.cashback
+    ) for t in txns]
+    a = AnalyticsEngine(objs).get_analytics()
+    dates = sorted([t.date for t in txns])
+    date_range = f"{dates[0].strftime('%d %b %Y')} to {dates[-1].strftime('%d %b %Y')}" if dates else ""
+    stats = {
+        "total_transactions":   len(txns),
+        "total_spent":          a.get("total_spent", 0),
+        "total_received":       a.get("total_received", 0),
+        "total_cashback":       a.get("total_cashback", 0),
+        "highest_expense":      max((t.amount for t in objs if t.transaction_type=="sent"), default=0),
+        "category_breakdown":   a.get("category_breakdown", {}),
+        "top_merchants":        a.get("top_merchants", []),
+        "top_received_sources": a.get("top_received_sources", []),
+        "monthly_trend":        a.get("monthly_trend", {}),
+        "recurring_merchants":  a.get("recurring_merchants", []),
+        "largest_transactions": a.get("largest_transactions", []),
+        "date_range":           date_range,
+    }
+    return rag_service.query(req.question, user_id=uid, external_stats=stats)
 
 @app.get("/api/rag/status")
 def rag_status(db:Session=Depends(get_db)):
@@ -446,7 +492,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
                        db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB).filter(TransactionDB.id == txn_id)
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid: q = q.filter(TransactionDB.user_id == uid)
     t = q.first()
     if not t: raise HTTPException(404, "Transaction not found")
 
@@ -455,19 +501,28 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
     if req.category is not None:
         # Store as custom_category if different from auto-detected
         try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
+        t.custom_category = req.category if req.category != t.category else None
+    except Exception:
+        pass  # column not yet in DB
 
     db.commit()
-    return _row(t)
+    row = _row(t)
+    try:
+        cq = db.query(TransactionDB.custom_category).filter(
+            TransactionDB.custom_category.isnot(None), TransactionDB.user_id == uid)
+        custom = sorted({r[0] for r in cq.all() if r[0]})
+        default = ['Credit Card','Education','Entertainment','Food & Grocery',
+                   'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities']
+        row['all_categories'] = sorted(set(default + custom))
+    except: pass
+    return row
 
 
 @app.get("/api/categories")
 def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: q = q.filter(TransactionDB.user_id == str(uid))
+    if uid: q = q.filter(TransactionDB.user_id == uid)
     custom = list({r[0] for r in q.all() if r[0]})
 
     default = ['Credit Card','Healthcare','Travel','Shopping','Food & Grocery',
@@ -500,9 +555,63 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
         })
     ins, skp = _dedup_insert(db, rows, "sms", uid)
     total = db.query(TransactionDB).filter(
-        TransactionDB.user_id == (str(uid) if uid else None)
+        TransactionDB.user_id == uid
     ).count()
     return {"inserted": ins, "skipped": skp, "total_stored": total}
+
+
+
+@app.get("/api/admin/stats")
+def admin_stats(db: Session = Depends(get_db), admin = Depends(require_admin)):
+    from sqlalchemy import func
+    from datetime import timedelta
+    now = datetime.utcnow()
+    total_users  = db.query(func.count(UserDB.id)).scalar() or 0
+    total_txns   = db.query(func.count(TransactionDB.id)).scalar() or 0
+    online_users = db.query(func.count(UserDB.id)).filter(
+        UserDB.last_seen >= now - timedelta(minutes=5)).scalar() or 0
+    new_today = db.query(func.count(UserDB.id)).filter(
+        UserDB.created_at >= now.replace(hour=0,minute=0,second=0,microsecond=0)).scalar() or 0
+    return {"total_users":total_users,"online_now":online_users,
+            "new_today":new_today,"total_txns":total_txns}
+
+
+@app.get("/api/admin/users")
+def admin_users(db: Session = Depends(get_db), admin = Depends(require_admin)):
+    from sqlalchemy import func
+    from datetime import timedelta
+    now = datetime.utcnow()
+    users = db.query(UserDB).all()
+    result = []
+    for u in users:
+        txn_count = db.query(func.count(TransactionDB.id)).filter(
+            TransactionDB.user_id == u.id).scalar() or 0
+        latest = db.query(TransactionDB.date).filter(
+            TransactionDB.user_id == u.id).order_by(TransactionDB.date.desc()).first()
+        last   = getattr(u, "last_seen", None)
+        online = bool(last and (now - last).total_seconds() < 300)
+        result.append({
+            "id": u.id, "email": u.email, "name": u.name,
+            "is_admin": bool(getattr(u,"is_admin",False)),
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "last_seen": last.isoformat() if last else None,
+            "online": online, "txn_count": txn_count,
+            "latest_txn_date": latest[0].isoformat() if latest else None,
+        })
+    result.sort(key=lambda x:(x["online"],x["last_seen"] or ""),reverse=True)
+    return {"users":result,"total":len(result),
+            "online_now":sum(1 for u in result if u["online"])}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(get_db),
+                      admin = Depends(require_admin)):
+    user = db.query(UserDB).filter(UserDB.id == user_id).first()
+    if not user: raise HTTPException(404, "User not found")
+    if user.email == admin.email: raise HTTPException(400, "Cannot delete yourself")
+    db.query(TransactionDB).filter(TransactionDB.user_id == user_id).delete()
+    db.delete(user); db.commit()
+    return {"ok": True}
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}

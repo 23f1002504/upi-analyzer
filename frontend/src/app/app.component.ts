@@ -513,7 +513,9 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 </div>
 </div>
   `,
-
+</div>
+</div>
+  `,
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -1046,6 +1048,7 @@ export class AppComponent implements OnInit {
     this.loadCategories();
     // Recalculate chart sizes after DOM is ready
     setTimeout(() => this.onResize(), 100);
+    this.loadAbout();
   }
 
   loadCategories() {
@@ -1380,6 +1383,62 @@ export class AppComponent implements OnInit {
       next: (r) => { this.adminUsers = r.users || []; this.adminLoading = false; },
       error: () => { this.adminLoading = false; }
     });
+  }
+
+
+  // ── ABOUT ──────────────────────────────────────────────────────────────────
+  loadAbout() {
+    this.http.get<any>(`${this.api}/about`).subscribe({
+      next: (r) => { this.aboutContent = r; },
+      error: () => {}
+    });
+  }
+
+  aboutBodyHtml(): string {
+    const body = this.aboutContent?.about_body || '';
+    return body.split('\n').map((l: string) =>
+      l.startsWith('•') ? `<li>${l.slice(1).trim()}</li>` : `<p>${l}</p>`
+    ).join('');
+  }
+
+  startEditAbout() {
+    this.aboutEdit    = { ...this.aboutContent };
+    this.editingAbout = true;
+  }
+
+  saveAbout() {
+    this.http.put<any>(`${this.api}/about`, this.aboutEdit,
+      { headers: this.getHeaders() }).subscribe({
+      next: (r) => { this.aboutContent = r; this.editingAbout = false; this.showToast('About page updated'); },
+      error: () => this.showToast('Save failed', false)
+    });
+  }
+
+  // ── SUGGESTIONS ────────────────────────────────────────────────────────────
+  submitSuggestion() {
+    this.suggErr = '';
+    if (!this.suggTitle?.trim() || !this.suggMsg?.trim()) {
+      this.suggErr = 'Please fill in both fields.'; return;
+    }
+    this.http.post<any>(`${this.api}/suggestions`,
+      { title: this.suggTitle, message: this.suggMsg },
+      { headers: this.getHeaders() }).subscribe({
+      next: () => { this.suggSent = true; this.suggTitle = ''; this.suggMsg = ''; },
+      error: () => { this.suggErr = 'Failed to send. Please try again.'; }
+    });
+  }
+
+  loadAdminSuggestions() {
+    this.http.get<any>(`${this.api}/admin/suggestions`,
+      { headers: this.getHeaders() }).subscribe({
+      next: (r) => { this.adminSuggestions = r.suggestions || []; },
+      error: () => {}
+    });
+  }
+
+  updateSuggStatus(s: any) {
+    this.http.patch(`${this.api}/admin/suggestions/${s.id}`,
+      { status: s.status }, { headers: this.getHeaders() }).subscribe();
   }
 
   private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
