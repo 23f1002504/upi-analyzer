@@ -256,7 +256,7 @@ def _parse_phonepay_csv(content: bytes) -> list[dict]:
 
 def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
     q = db.query(TransactionDB)
-    if user_id is not None: q = q.filter(TransactionDB.user_id == user_id)
+    if user_id: q = q.filter(TransactionDB.user_id == str(user_id))
     if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
     if date_to:
         dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
@@ -287,12 +287,7 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
     user = UserDB(email=req.email, name=req.name, hashed_pw=hash_pw(req.password))
     db.add(user); db.commit(); db.refresh(user)
     token = create_token({"sub": user.email, "uid": user.id})
-    # Update last_seen
-    try:
-        user.last_seen = datetime.utcnow()
-        db.commit()
-    except: pass
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
 
 @app.post("/api/auth/login")
 def login(req: LoginReq, db: Session = Depends(get_db)):
@@ -300,12 +295,7 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     if not user or not verify_pw(req.password, user.hashed_pw):
         raise HTTPException(401, "Invalid email or password")
     token = create_token({"sub": user.email, "uid": user.id})
-    # Update last_seen
-    try:
-        user.last_seen = datetime.utcnow()
-        db.commit()
-    except: pass
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
 
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
@@ -322,7 +312,7 @@ async def upload_pdf(file: UploadFile = File(...),
     rows = [{**t.model_dump(), 'date': t.date.isoformat()} for t in txns]
     uid  = user.id if user else None
     ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 @app.post("/api/upload-csv")
@@ -331,7 +321,6 @@ async def upload_csv(file: UploadFile = File(...),
                      user = Depends(get_current_user)):
     content = await file.read()
     rows = []
-    print(f"CSV upload: {file.filename}, size: {len(content)} bytes")
 
     # 1. PhonePe (tab/comma, Date header, CREDIT/DEBIT column)
     try:
@@ -376,10 +365,10 @@ async def upload_csv(file: UploadFile = File(...),
                     except: continue
                 if rows: break
             except: continue
-    if not rows: raise HTTPException(400, f"Could not parse CSV - tried PhonePe, GPay, SuperMoney formats. Check file format.")
+    if not rows: raise HTTPException(400, "Could not parse CSV")
     uid = user.id if user else None
     ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
+    total = db.query(TransactionDB).filter(TransactionDB.user_id == (str(uid) if uid else None)).count()
     return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
 
 
@@ -396,7 +385,7 @@ def get_transactions(date_from:str=None, date_to:str=None,
 def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB)
-    if uid: q = q.filter(TransactionDB.user_id == uid)
+    if uid: q = q.filter(TransactionDB.user_id == str(uid))
     q.delete(); db.commit()
     return {"cleared": True}
 
@@ -415,7 +404,7 @@ def analytics(date_from:str=None, date_to:str=None,
 def date_range(db:Session=Depends(get_db), user=Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date), func.count(TransactionDB.id))
-    if uid: q = q.filter(TransactionDB.user_id == uid)
+    if uid: q = q.filter(TransactionDB.user_id == str(uid))
     row = q.first()
     return {"min": row[0].date().isoformat() if row[0] else None,
             "max": row[1].date().isoformat() if row[1] else None, "count": row[2]}
@@ -457,7 +446,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
                        db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB).filter(TransactionDB.id == txn_id)
-    if uid: q = q.filter(TransactionDB.user_id == uid)
+    if uid: q = q.filter(TransactionDB.user_id == str(uid))
     t = q.first()
     if not t: raise HTTPException(404, "Transaction not found")
 
@@ -478,7 +467,7 @@ def update_transaction(txn_id: int, req: UpdateTxnReq,
 def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
     uid = user.id if user else None
     q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: q = q.filter(TransactionDB.user_id == uid)
+    if uid: q = q.filter(TransactionDB.user_id == str(uid))
     custom = list({r[0] for r in q.all() if r[0]})
 
     default = ['Credit Card','Healthcare','Travel','Shopping','Food & Grocery',
@@ -511,7 +500,7 @@ def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_
         })
     ins, skp = _dedup_insert(db, rows, "sms", uid)
     total = db.query(TransactionDB).filter(
-        TransactionDB.user_id == uid
+        TransactionDB.user_id == (str(uid) if uid else None)
     ).count()
     return {"inserted": ins, "skipped": skp, "total_stored": total}
 
