@@ -16,7 +16,7 @@ from .analytics import AnalyticsEngine
 from .models import Transaction
 from .database import init_db, get_db, TransactionDB, SessionLocal, SiteContent, Suggestion
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user, require_admin)
+                   get_current_user, require_user)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -29,6 +29,18 @@ _parser = UPIPDFParser()
 @app.on_event("startup")
 def startup():
     init_db()
+    db = SessionLocal()
+    try:
+        from .seed_admin import seed
+        seed(db)
+    except Exception as e:
+        print(f"Seed error: {e}")
+    try:
+        _seed_about(db)
+    except Exception as e:
+        print(f"About seed error: {e}")
+    finally:
+        db.close()
 
 def _safe(obj):
     if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}

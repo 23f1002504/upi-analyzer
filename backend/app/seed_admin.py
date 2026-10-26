@@ -1,4 +1,3 @@
-
 import os, hashlib, hmac
 from datetime import datetime
 
@@ -11,7 +10,6 @@ def hash_pw(pw: str) -> str:
     return hmac.new(SECRET_KEY.encode(), pw.encode(), hashlib.sha256).hexdigest()
 
 def seed(db):
-    """Call this on startup to ensure admin exists."""
     from .auth import UserDB
     existing = db.query(UserDB).filter(UserDB.email == ADMIN_EMAIL).first()
     if not existing:
@@ -25,12 +23,10 @@ def seed(db):
         )
         db.add(admin)
         db.commit()
-        print(f"✓ Admin seeded: {ADMIN_EMAIL}")
+        print(f"✓ Admin created: {ADMIN_EMAIL}")
     else:
-        # Ensure existing user is admin
-        if not existing.is_admin:
-            existing.is_admin = True
-            db.commit()
-            print(f"✓ Promoted to admin: {ADMIN_EMAIL}")
-        else:
-            print(f"✓ Admin exists: {ADMIN_EMAIL}")
+        # Always update hash and ensure is_admin=True
+        existing.hashed_pw = hash_pw(ADMIN_PASSWORD)
+        existing.is_admin  = True
+        db.commit()
+        print(f"✓ Admin updated: {ADMIN_EMAIL}")
