@@ -575,7 +575,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
     </main>
 
-div>
+</div>
 </div>
   `,
 
@@ -1452,6 +1452,9 @@ export class AppComponent implements OnInit {
 
 
   // ── ABOUT ──────────────────────────────────────────────────────────────────
+  aboutContent: any = null;
+  aboutEdit: any = {};
+  editingAbout = false;
   loadAbout() {
     this.http.get<any>(`${this.api}/about`).subscribe({
       next: (r) => { this.aboutContent = r; },
@@ -1480,6 +1483,13 @@ export class AppComponent implements OnInit {
   }
 
   // ── SUGGESTIONS ────────────────────────────────────────────────────────────
+
+  showSuggestionForm = false;
+  suggTitle = '';
+  suggMsg = '';
+  suggErr = '';
+  suggSent = false;
+
   submitSuggestion() {
     this.suggErr = '';
     if (!this.suggTitle?.trim() || !this.suggMsg?.trim()) {
@@ -1492,6 +1502,8 @@ export class AppComponent implements OnInit {
       error: () => { this.suggErr = 'Failed to send. Please try again.'; }
     });
   }
+  showAdminSugg = false;
+  adminSuggestions: any[] = [];
 
   loadAdminSuggestions() {
     this.http.get<any>(`${this.api}/admin/suggestions`,
