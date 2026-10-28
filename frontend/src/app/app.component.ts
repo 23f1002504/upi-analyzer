@@ -120,6 +120,7 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </button>
       <div class="bar-title">{{ tabLabel() }}</div>
       <div class="bar-right">
+        <span class="trademark">Made by AM</span>
         <div class="toast" [class.tok]="toast.ok" [class.terr]="!toast.ok" *ngIf="toast.msg">{{ toast.msg }}</div>
       </div>
     </header>
@@ -424,12 +425,71 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
       </div>
     </div>
 
-        <!-- ADMIN TAB -->
+    
+    <!-- ABOUT TAB -->
+    <main class="page" *ngIf="tab==='about'">
+      <div class="about-wrap">
+
+        <div class="about-content" *ngIf="!editingAbout">
+          <div class="about-hero">
+            <div class="about-logo">₹</div>
+            <h1 class="about-title">{{ aboutContent?.about_title || 'UPI Transaction Analyzer' }}</h1>
+            <p class="about-sub">{{ aboutContent?.about_subtitle || 'Your personal finance dashboard' }}</p>
+          </div>
+
+          <div class="about-body">
+            <p *ngFor="let line of (aboutContent?.about_body || '').split('\n')"
+               [class.bullet]="line.startsWith('•')">
+              {{ line }}
+            </p>
+          </div>
+
+          <div class="about-version">{{ aboutContent?.about_version }}</div>
+
+          <div class="about-actions">
+            <button class="about-sugg-btn" (click)="showSuggestionForm=!showSuggestionForm">
+              💡 {{ showSuggestionForm ? 'Close' : 'Send a suggestion' }}
+            </button>
+            <button class="about-edit-btn" *ngIf="isAdmin" (click)="startEditAbout()">
+              ✎ Edit content
+            </button>
+          </div>
+
+          <div class="sugg-form" *ngIf="showSuggestionForm">
+            <div class="sugg-heading">Got an idea? We'd love to hear it.</div>
+            <div *ngIf="suggSent" class="sugg-sent">✓ Thanks! Your suggestion has been sent.</div>
+            <div *ngIf="!suggSent">
+              <input class="sugg-in" [(ngModel)]="suggTitle" placeholder="Short title" maxlength="120">
+              <textarea class="sugg-ta" [(ngModel)]="suggMsg" placeholder="Describe your idea…" rows="4" maxlength="1000"></textarea>
+              <div class="sugg-err" *ngIf="suggErr">{{ suggErr }}</div>
+              <button class="sugg-submit" (click)="submitSuggestion()">Submit suggestion</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="about-edit-panel" *ngIf="editingAbout && isAdmin">
+          <div class="edit-head">
+            <div class="edit-title">Edit About Page</div>
+            <div class="edit-actions">
+              <button class="edit-save" (click)="saveAbout()">Save</button>
+              <button class="edit-cancel" (click)="editingAbout=false">Cancel</button>
+            </div>
+          </div>
+          <div class="edit-field"><label>Title</label><input class="edit-in" [(ngModel)]="aboutEdit.about_title"></div>
+          <div class="edit-field"><label>Subtitle</label><input class="edit-in" [(ngModel)]="aboutEdit.about_subtitle"></div>
+          <div class="edit-field"><label>Body</label><textarea class="edit-ta" [(ngModel)]="aboutEdit.about_body" rows="12"></textarea></div>
+          <div class="edit-field"><label>Version</label><input class="edit-in" [(ngModel)]="aboutEdit.about_version"></div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ADMIN TAB -->
     <main class="page" *ngIf="tab==='admin' && isAdmin">
 
       <div class="adm-header">
         <div>
-          <div class="adm-title">Admin Dashboard</div>
+          <div class="adm-title">⚙ Admin Dashboard</div>
           <div class="adm-sub">Platform overview · auto-refreshes every 30s</div>
         </div>
         <button class="adm-refresh" (click)="loadAdminData()" [disabled]="adminLoading">
@@ -437,82 +497,88 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         </button>
       </div>
 
-      <!-- Stats cards -->
+      <!-- KPI Cards -->
       <div class="adm-kpis" *ngIf="adminStats">
-        <div class="adm-kpi">
-          <div class="adm-kpi-n">{{ adminStats.total_users }}</div>
-          <div class="adm-kpi-l">Total users</div>
-        </div>
-        <div class="adm-kpi adm-kpi-green">
-          <div class="adm-kpi-n">{{ adminStats.online_now }}</div>
-          <div class="adm-kpi-l">● Online now</div>
-        </div>
-        <div class="adm-kpi">
-          <div class="adm-kpi-n">{{ adminStats.new_today }}</div>
-          <div class="adm-kpi-l">New today</div>
-        </div>
-        <div class="adm-kpi">
-          <div class="adm-kpi-n">{{ adminStats.total_txns | number }}</div>
-          <div class="adm-kpi-l">Total transactions</div>
-        </div>
+        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.total_users }}</div><div class="adm-kpi-l">Total Users</div></div>
+        <div class="adm-kpi adm-kpi-green"><div class="adm-kpi-n">{{ adminStats.online_now }}</div><div class="adm-kpi-l">● Online Now</div></div>
+        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.new_today }}</div><div class="adm-kpi-l">New Today</div></div>
+        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.total_txns | number }}</div><div class="adm-kpi-l">Total Transactions</div></div>
       </div>
 
-      <!-- Users table -->
+      <div class="adm-empty-state" *ngIf="!adminStats && !adminLoading">
+        <button class="adm-load-btn" (click)="loadAdminData()">Load Admin Data</button>
+      </div>
+
+      <!-- Users Table -->
       <div class="adm-card">
         <div class="adm-card-head">
           Users
-          <span class="adm-online-badge" *ngIf="adminStats?.online_now">
-            {{ adminStats.online_now }} online
-          </span>
-          <span class="adm-total-badge">{{ adminUsers.length }} total</span>
+          <span class="adm-badge-green" *ngIf="adminStats?.online_now">{{ adminStats.online_now }} online</span>
+          <span class="adm-badge-grey">{{ adminUsers.length }} total</span>
         </div>
-        <div *ngIf="!adminUsers.length && !adminLoading" class="adm-empty">
-          No users yet — click Refresh
+        <div class="adm-empty" *ngIf="!adminUsers.length && !adminLoading">No users — click Refresh</div>
+        <div class="adm-tbl-wrap" *ngIf="adminUsers.length">
+          <table class="adm-tbl">
+            <thead><tr>
+              <th>Status</th><th>Name</th><th>Email</th><th>Transactions</th>
+              <th>Latest data</th><th>Last active</th><th>Role</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr *ngFor="let u of adminUsers" [class.adm-row-online]="u.online">
+                <td class="adm-status-cell">
+                  <span [class.adm-dot-on]="u.online" [class.adm-dot-off]="!u.online">{{ u.online ? '●' : '○' }}</span>
+                </td>
+                <td class="adm-name">{{ u.name }}</td>
+                <td class="adm-email">{{ u.email }}</td>
+                <td class="adm-num">{{ u.txn_count }}</td>
+                <td class="adm-dim">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
+                <td class="adm-dim">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
+                <td><span class="adm-role" [class.adm-role-admin]="u.is_admin">{{ u.is_admin ? 'Admin' : 'User' }}</span></td>
+                <td><button class="adm-del" *ngIf="!u.is_admin" (click)="deleteUser(u)" title="Delete">✕</button></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <table class="adm-tbl" *ngIf="adminUsers.length">
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Transactions</th>
-              <th>Last data</th>
-              <th>Last active</th>
-              <th>Role</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr *ngFor="let u of adminUsers" [class.adm-row-online]="u.online">
-              <td>
-                <span class="adm-status" [class.adm-online]="u.online" [class.adm-offline]="!u.online">
-                  {{ u.online ? '●' : '○' }}
-                </span>
-              </td>
-              <td class="adm-name">{{ u.name }}</td>
-              <td class="adm-email">{{ u.email }}</td>
-              <td class="adm-num">{{ u.txn_count }}</td>
-              <td class="adm-dim">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
-              <td class="adm-dim">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
-              <td>
-                <span class="adm-role" [class.adm-role-admin]="u.is_admin">
-                  {{ u.is_admin ? 'Admin' : 'User' }}
-                </span>
-              </td>
-              <td>
-                <button class="adm-del" *ngIf="!u.is_admin"
-                  (click)="deleteUser(u)" title="Delete user">✕</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      </div>
+
+      <!-- Suggestions -->
+      <div class="adm-card" style="margin-top:14px">
+        <div class="adm-card-head">
+          User Suggestions
+          <span class="adm-badge-green" *ngIf="adminSuggestions.length">{{ adminSuggestions.length }}</span>
+          <button class="adm-sugg-btn" (click)="loadAdminSuggestions(); showAdminSugg=!showAdminSugg">
+            {{ showAdminSugg ? 'Hide' : 'View Suggestions' }}
+          </button>
+        </div>
+        <div *ngIf="showAdminSugg">
+          <div class="adm-empty" *ngIf="!adminSuggestions.length">No suggestions yet.</div>
+          <table class="adm-tbl" *ngIf="adminSuggestions.length">
+            <thead><tr><th>From</th><th>Title</th><th>Message</th><th>Date</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr *ngFor="let s of adminSuggestions">
+                <td class="adm-email">{{ s.user_name }}<br><small style="color:#444">{{ s.user_email }}</small></td>
+                <td class="adm-name">{{ s.title }}</td>
+                <td class="adm-dim" style="max-width:260px;white-space:pre-wrap;font-size:12px">{{ s.message }}</td>
+                <td class="adm-dim">{{ s.created_at | date:'d MMM' }}</td>
+                <td>
+                  <select class="adm-status-sel" [(ngModel)]="s.status" (change)="updateSuggStatus(s)">
+                    <option value="new">New</option>
+                    <option value="reviewed">Reviewed</option>
+                    <option value="done">Done ✓</option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
     </main>
 
-</div>
+div>
 </div>
   `,
+
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -1056,8 +1122,10 @@ export class AppComponent implements OnInit {
   }
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
-  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat'} as any)[this.tab]||''; }
+  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat',about:'About',admin:'Admin'} as any)[this.tab]||''; }
   go(t: string) {
+    if (t === 'admin') setTimeout(() => this.loadAdminData(), 100);
+    if (t === 'about' && !this.aboutContent?.about_title) this.loadAbout();
     if (t !== 'admin') clearTimeout((this as any)._adminTimer);
     this.tab = t;
     this.sidebarOpen = false;
