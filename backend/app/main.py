@@ -16,7 +16,7 @@ from .analytics import AnalyticsEngine
 from .models import Transaction
 from .database import init_db, get_db, TransactionDB, SessionLocal, SiteContent, Suggestion
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user, require_admin)
+                   get_current_user, require_user)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
@@ -299,15 +299,18 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
     user = UserDB(email=req.email, name=req.name, hashed_pw=hash_pw(req.password))
     db.add(user); db.commit(); db.refresh(user)
     token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
 
 @app.post("/api/auth/login")
 def login(req: LoginReq, db: Session = Depends(get_db)):
     user = db.query(UserDB).filter(UserDB.email == req.email).first()
     if not user or not verify_pw(req.password, user.hashed_pw):
         raise HTTPException(401, "Invalid email or password")
+    try:
+        user.last_seen = datetime.utcnow(); db.commit()
+    except Exception: db.rollback()
     token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
 
 
 
@@ -326,7 +329,7 @@ def change_password(req: ChangePwReq, db: Session = Depends(get_db),
 
 @app.get("/api/auth/me")
 def me(user: UserDB = Depends(require_user)):
-    return {"id": user.id, "email": user.email, "name": user.name}
+    return {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}
 
 
 # ── UPLOAD ───────────────────────────────────────────────────────────────────

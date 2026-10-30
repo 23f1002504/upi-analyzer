@@ -74,6 +74,10 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
         Admin
         <span class="sb-badge-red" *ngIf="adminStats?.online_now">{{ adminStats?.online_now }}</span>
       </button>
+      <button class="sb-lnk" [class.on]="tab==='about'" (click)="go('about')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        About
+      </button>
     </nav>
 
     <div class="sb-gap"></div>
@@ -1452,9 +1456,6 @@ export class AppComponent implements OnInit {
 
 
   // ── ABOUT ──────────────────────────────────────────────────────────────────
-  aboutContent: any = null;
-  aboutEdit: any = {};
-  editingAbout = false;
   loadAbout() {
     this.http.get<any>(`${this.api}/about`).subscribe({
       next: (r) => { this.aboutContent = r; },
@@ -1483,13 +1484,6 @@ export class AppComponent implements OnInit {
   }
 
   // ── SUGGESTIONS ────────────────────────────────────────────────────────────
-
-  showSuggestionForm = false;
-  suggTitle = '';
-  suggMsg = '';
-  suggErr = '';
-  suggSent = false;
-
   submitSuggestion() {
     this.suggErr = '';
     if (!this.suggTitle?.trim() || !this.suggMsg?.trim()) {
@@ -1502,8 +1496,6 @@ export class AppComponent implements OnInit {
       error: () => { this.suggErr = 'Failed to send. Please try again.'; }
     });
   }
-  showAdminSugg = false;
-  adminSuggestions: any[] = [];
 
   loadAdminSuggestions() {
     this.http.get<any>(`${this.api}/admin/suggestions`,
