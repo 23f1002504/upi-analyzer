@@ -1035,6 +1035,22 @@ export class AppComponent implements OnInit {
     return 'https://upi-analyzer.onrender.com/api';
   })();
 
+  // ── added declarations ──
+  aboutContent: any = {};
+  aboutEdit: any = {};
+  editingAbout = false;
+  showSuggestionForm = false;
+  suggTitle = '';
+  suggMsg = '';
+  suggSent = false;
+  suggErr = '';
+  adminSuggestions: any[] = [];
+  showAdminSugg = false;
+  pwNew = '';
+  pwConfirm = '';
+  pwOk = false;
+  fIncluded = '';
+
   constructor(private http: HttpClient) {}
 
   ngOnInit() {
