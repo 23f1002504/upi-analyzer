@@ -581,8 +581,8 @@ interface User { id:number; email:string; name:string; is_admin?:boolean; }
 
 </div>
 </div>
+ 
   `,
-
   styles: [`
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :host{display:block}
@@ -1046,10 +1046,6 @@ export class AppComponent implements OnInit {
   suggErr = '';
   adminSuggestions: any[] = [];
   showAdminSugg = false;
-  pwNew = '';
-  pwConfirm = '';
-  pwOk = false;
-  fIncluded = '';
 
   constructor(private http: HttpClient) {}
 
