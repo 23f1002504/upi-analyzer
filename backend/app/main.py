@@ -1,30 +1,78 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query, Form
-from typing import Optional
+import io, math
+from datetime import datetime, timedelta
+from typing import Optional, List
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy import func
-import pandas as pd
-import numpy as np
-import io, math, re
-from datetime import datetime
+from sqlalchemy.orm import Session
 
 from .pdf_parser import UPIPDFParser
 from .analytics import AnalyticsEngine
 from .models import Transaction
-from .database import init_db, get_db, TransactionDB, SessionLocal, SiteContent, Suggestion
+from .csv_parsers import parse_any_csv
+from .database import init_db, get_db, SessionLocal, TransactionDB, SiteContent, Suggestion
 from .auth import (UserDB, hash_pw, verify_pw, create_token,
-                   get_current_user, require_user)
+                   get_current_user, require_user, require_admin)
 from . import rag_service
 
 app = FastAPI(title="UPI Transaction Analyzer")
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
 
-_parser = UPIPDFParser()
+# Registered BEFORE CORS so CORS is the outer layer: even a crash returns a JSON
+# 500 *with* CORS headers (otherwise the browser only shows a confusing CORS error).
+@app.middleware("http")
+async def _catch_all(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        print(f"[500] {request.method} {request.url.path}: {type(e).__name__}: {e}")
+        return JSONResponse({"detail": f"Server error: {type(e).__name__}"}, status_code=500)
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+_pdf = UPIPDFParser()
+
+DEFAULT_CATEGORIES = ['Credit Card', 'Education', 'Entertainment', 'Food & Grocery', 'Healthcare',
+                      'Other', 'Shopping', 'Transfer', 'Transport', 'Travel', 'Utilities']
+
+DEFAULT_ABOUT = {
+    "about_title": "UPI Transaction Analyzer",
+    "about_subtitle": "See where your money really goes — across every month, every app.",
+    "about_body": (
+        "What is this?\n"
+        "A private dashboard that turns your UPI statements into clear answers: how much you spent, "
+        "where it went, who paid you, and how it changes month to month.\n\n"
+        "What can it do?\n"
+        "• Import statements from PhonePe, Google Pay and SuperMoney (CSV or PDF)\n"
+        "• Combine uploads from different months — duplicates are skipped automatically\n"
+        "• Filter everything by any date range\n"
+        "• Charts for categories, merchants, weekdays, income and monthly trends\n"
+        "• Re-categorise any transaction or leave it out of the analytics\n"
+        "• Ask the AI questions about your own spending\n\n"
+        "How to use it\n"
+        "1. Create an account and sign in\n"
+        "2. Click Import CSV / PDF in the sidebar and pick your statement\n"
+        "3. Explore Overview, Analytics and Transactions\n"
+        "4. Open AI Chat and ask things like “What did I spend on food in May?”\n"
+        "5. Upload newer statements any time — your history stays\n\n"
+        "Privacy\n"
+        "Your data is stored under your account only. Account numbers, UPI IDs and phone numbers are "
+        "masked before anything reaches the AI.\n\n"
+        "Built by AM."
+    ),
+    "about_version": "v2.1",
+}
+ABOUT_KEYS = set(DEFAULT_ABOUT)
+
+
+def _seed_about(db: Session):
+    for k, v in DEFAULT_ABOUT.items():
+        if not db.query(SiteContent).filter(SiteContent.key == k).first():
+            db.add(SiteContent(key=k, value=v))
+    db.commit()
+
 
 @app.on_event("startup")
 def startup():
@@ -33,600 +81,421 @@ def startup():
     try:
         from .seed_admin import seed
         seed(db)
-    except Exception as e:
-        print(f"Seed error: {e}")
-    try:
         _seed_about(db)
     except Exception as e:
-        print(f"About seed error: {e}")
+        print(f"startup seed error: {type(e).__name__}: {e}")
     finally:
         db.close()
 
-def _safe(obj):
-    if isinstance(obj, dict):  return {k: _safe(v) for k, v in obj.items()}
-    if isinstance(obj, list):  return [_safe(v) for v in obj]
-    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)): return None
-    return obj
 
-def _s(x):
-    return str(x).strip() if (x is not None and str(x).strip() not in ('nan','None','')) else ''
+# ── helpers ───────────────────────────────────────────────────────────────────
+def _safe(o):
+    if isinstance(o, dict):  return {k: _safe(v) for k, v in o.items()}
+    if isinstance(o, list):  return [_safe(v) for v in o]
+    if isinstance(o, float) and (math.isnan(o) or math.isinf(o)): return None
+    return o
 
 def _row(t: TransactionDB) -> dict:
-    custom_cat = getattr(t, 'custom_category', None)
-    included   = getattr(t, 'included', True)
-    return {
-        "id": t.id, "date": t.date.isoformat(), "time": t.time,
-        "amount": t.amount, "transaction_type": t.transaction_type,
-        "merchant": t.merchant,
-        "category": custom_cat or t.category,
-        "base_category": t.category,
-        "custom_category": custom_cat,
-        "note": t.note, "cashback": t.cashback,
-        "included": included if included is not None else True,
-    }
+    custom = t.custom_category
+    return {"id": t.id, "date": t.date.isoformat(), "time": t.time, "amount": t.amount,
+            "transaction_type": t.transaction_type, "merchant": t.merchant,
+            "category": custom or t.category or "Other", "base_category": t.category,
+            "custom_category": custom, "note": t.note or "", "cashback": t.cashback or 0.0,
+            "included": True if t.included is None else bool(t.included)}
 
-def _dedup_insert(db, rows, source, user_id=None):
-    inserted = skipped = 0
-    for r in rows:
-        dt = r.get("date")
-        if isinstance(dt, str): dt = datetime.fromisoformat(dt)
-        exists = db.query(TransactionDB).filter(
-            TransactionDB.date == dt,
-            TransactionDB.merchant == r["merchant"],
-            TransactionDB.amount == r["amount"],
-            TransactionDB.user_id == user_id,
-        ).first()
-        if exists: skipped += 1; continue
-        db.add(TransactionDB(
-            user_id=user_id, date=dt, time=r.get("time","00:00"),
-            amount=r["amount"], transaction_type=r["transaction_type"],
-            merchant=r["merchant"], category=r.get("category","Other"),
-            note=r.get("note",""), cashback=r.get("cashback",0.0), source_file=source,
-        ))
-        inserted += 1
-    db.commit()
-    return inserted, skipped
+def _parse_day(s: str, end: bool = False) -> datetime:
+    s = s.strip()
+    if "T" in s:
+        return datetime.fromisoformat(s)
+    d = datetime.fromisoformat(s)
+    return d.replace(hour=23, minute=59, second=59) if end else d
 
-def _parse_supermoney_df(df):
-    results = []
-    for _, row in df.iterrows():
-        v = list(row)
-        while len(v) < 8: v.append(None)
-        merchant = (_s(v[0]) + (' ' + _s(v[1]) if _s(v[1]) else '')).strip()
-        if not merchant: continue
-        try: amount = float(str(v[4]).replace(',','').replace('+',''))
-        except: continue
-        d5,d6,d7 = _s(v[5]),_s(v[6]),_s(v[7])
-        date_raw = f"{d5} {d6}" if re.match(r'^\d{4}$', d6) else d5
-        status   = d7 if re.match(r'^\d{4}$', d6) else (d6 if d6 else d7)
-        date_obj = _parser._parse_date(date_raw)
-        if not date_obj: continue
-        results.append({
-            'date': date_obj.isoformat(), 'time': '00:00', 'amount': abs(amount),
-            'transaction_type': 'sent' if amount < 0 else 'received',
-            'merchant': merchant[:100], 'note': status, 'cashback': 0.0,
-            'category': _parser._categorize_merchant(merchant),
-        })
-    return results
-
-
-def _parse_gpay_csv(content: bytes) -> list[dict]:
-    """
-    GPay CSV format:
-      col0: date ("02 Dec, 2025") or time or blank
-      col1: description ("Paid to X" / "Received from X" / UPI ID / bank)
-      col3 or col4: amount (₹2)
-    Header rows at top are skipped automatically.
-    """
-    import csv as _csv, io as _io
-    results = []
-
-    def _pd(s):
-        s = re.sub(r'[",]', '', s).strip()
-        mm = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
-              'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
-        m = re.match(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$', s)
-        if not m: return None
-        month = mm.get(m.group(2).lower()[:3])
-        if not month: return None
-        try: return datetime(int(m.group(3)), month, int(m.group(1)))
-        except: return None
-
-    def _amt(s):
-        s = re.sub(r'[₹,\'\s]', '', str(s))
-        try: return float(s)
-        except: return None
-
-    lines = content.decode('utf-8', errors='ignore').splitlines()
-    i = 0
-    while i < len(lines):
-        try:
-            row = next(_csv.reader([lines[i]]))
-        except:
-            row = lines[i].split(',')
-        row = [c.strip() for c in row]
-        while len(row) < 5: row.append('')
-
-        date_obj = _pd(row[0])
-        if date_obj:
-            desc = row[1].strip()
-            if any(x in desc.lower() for x in ['date', 'transaction detail', 'upi transaction']):
-                i += 1; continue
-
-            amount_raw = row[3] if row[3] else row[4]
-            amount = _amt(amount_raw)
-
-            txn_type = 'sent'
-            merchant = desc
-            if re.match(r'paid to', desc, re.I):
-                txn_type = 'sent'
-                merchant = re.sub(r'^paid to\s+', '', desc, flags=re.I).strip()
-            elif re.match(r'received from', desc, re.I):
-                txn_type = 'received'
-                merchant = re.sub(r'^received from\s+', '', desc, flags=re.I).strip()
-
-            # peek next line for time
-            time_str = '00:00'
-            if i + 1 < len(lines):
-                next_row = lines[i+1].split(',')
-                t = next_row[0].strip()
-                if re.match(r'\d{1,2}:\d{2}\s*(AM|PM)', t, re.I):
-                    time_str = t
-
-            if amount and merchant:
-                results.append({
-                    'date': date_obj.isoformat(), 'time': time_str,
-                    'amount': abs(amount),
-                    'transaction_type': txn_type,
-                    'merchant': merchant[:100], 'note': 'SUCCESS',
-                    'cashback': 0.0,
-                    'category': _parser._categorize_merchant(merchant),
-                })
-        i += 1
-    return results
-
-
-def _parse_phonepay_csv(content: bytes) -> list[dict]:
-    """
-    PhonePe CSV/TSV:
-      Tab or comma separated
-      Headers: Date, Time, Transaction Details, Transaction ID, UTR, Transaction Type, Credit/debit instrument, Amount
-      Date format: "Jun 15, 2026"
-      Transaction Type: CREDIT / DEBIT
-    """
-    import csv as _csv
-    lines = content.decode('utf-8', errors='ignore').splitlines()
-    results = []
-    header_found = False
-    month_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
-                 'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
-
-    def _pd(s):
-        s = re.sub(r'[",]', '', str(s)).strip()
-        m = re.match(r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})', s)
-        if not m: return None
-        month = month_map.get(m.group(1).lower()[:3])
-        if not month: return None
-        try: return datetime(int(m.group(3)), month, int(m.group(2)))
-        except: return None
-
-    for raw_line in lines:
-        # Try tab first, then csv
-        if '\t' in raw_line:
-            cols = [c.strip() for c in raw_line.split('\t')]
-        else:
-            try: cols = [c.strip().strip('"') for c in next(_csv.reader([raw_line]))]
-            except: cols = [c.strip() for c in raw_line.split(',')]
-
-        if not cols or not cols[0]: continue
-
-        # Detect header row
-        if cols[0].strip().lower() == 'date':
-            header_found = True
-            continue
-        if not header_found: continue
-        if len(cols) < 6: continue
-
-        date_obj = _pd(cols[0])
-        if not date_obj: continue
-
-        time_str     = cols[1].strip() if len(cols) > 1 else '00:00'
-        desc         = cols[2].strip() if len(cols) > 2 else ''
-        txn_type_raw = cols[5].strip() if len(cols) > 5 else ''
-        # Amount is last non-empty column (col 7, sometimes col 3)
-        amount_raw = ''
-        for i in [7, 6, 3]:
-            if len(cols) > i and cols[i].strip():
-                amount_raw = cols[i].strip()
-                break
-
-        # Skip header-like rows
-        if desc.lower() in ['transaction details', 'date', '']: continue
-        if 'upi transaction' in desc.lower(): continue
-
-        try: amount = float(re.sub(r'[₹,\s]', '', amount_raw))
-        except: continue
-        if amount <= 0: continue
-
-        txn_type = 'received' if 'credit' in txn_type_raw.lower() else 'sent'
-        merchant = desc
-        for prefix in ['received from ', 'paid to ', 'sent to ', 'payment to ', 'transferred to ', 'refund from ']:
-            if desc.lower().startswith(prefix):
-                merchant = desc[len(prefix):].strip()
-                break
-
-        if not merchant or merchant.lower() == 'nan': continue
-
-        results.append({
-            'date': date_obj.isoformat(), 'time': time_str,
-            'amount': amount, 'transaction_type': txn_type,
-            'merchant': merchant[:100], 'note': 'SUCCESS',
-            'cashback': 0.0, 'category': _parser._categorize_merchant(merchant),
-        })
-    return results
-
-
-def _query(db, user_id=None, date_from=None, date_to=None, all_rows=False):
-    q = db.query(TransactionDB)
-    if user_id: q = q.filter(TransactionDB.user_id == user_id)
-    if date_from: q = q.filter(TransactionDB.date >= datetime.fromisoformat(date_from))
-    if date_to:
-        dt = date_to if 'T' in date_to else date_to + 'T23:59:59'
-        q = q.filter(TransactionDB.date <= datetime.fromisoformat(dt))
+def _query(db: Session, uid: int, date_from=None, date_to=None, all_rows=False) -> List[TransactionDB]:
+    q = db.query(TransactionDB).filter(TransactionDB.user_id == uid)   # always scoped to one user
+    if date_from: q = q.filter(TransactionDB.date >= _parse_day(date_from))
+    if date_to:   q = q.filter(TransactionDB.date <= _parse_day(date_to, end=True))
     if not all_rows:
-        try:
-            q = q.filter((TransactionDB.included == True) | (TransactionDB.included == None))
-        except Exception:
-            pass  # column may not exist in old DB
-    return q.order_by(TransactionDB.date.desc()).all()
+        q = q.filter((TransactionDB.included == True) | (TransactionDB.included == None))  # noqa: E712
+    return q.order_by(TransactionDB.date.desc(), TransactionDB.id.desc()).all()
+
+def _to_models(txns: List[TransactionDB]) -> List[Transaction]:
+    return [Transaction(date=t.date, time=t.time or "00:00", amount=t.amount,
+                        transaction_type=t.transaction_type, merchant=t.merchant,
+                        category=t.custom_category or t.category, note=t.note or "",
+                        cashback=t.cashback or 0.0) for t in txns]
+
+def _dedup_insert(db: Session, rows: list, source: str, uid: int):
+    """Insert only what the user does not already have.
+    Matching is count-based on (date, type, merchant, amount, time): two identical coffees on one
+    day are both kept, re-uploading a file adds nothing, and overlapping statements add only the new rows."""
+    if not rows:
+        return 0, 0
+    from collections import Counter
+    dts = [datetime.fromisoformat(r["date"]) if isinstance(r["date"], str) else r["date"] for r in rows]
+    def key(dt, typ, merchant, amount, tm):
+        return (dt, typ, merchant, round(float(amount), 2), tm or "00:00")
+    have = Counter(key(t.date, t.transaction_type, t.merchant, t.amount, t.time) for t in
+                   db.query(TransactionDB.date, TransactionDB.transaction_type, TransactionDB.merchant,
+                            TransactionDB.amount, TransactionDB.time)
+                     .filter(TransactionDB.user_id == uid,
+                             TransactionDB.date >= min(dts), TransactionDB.date <= max(dts)).all())
+    seen, ins, skp = Counter(), 0, 0
+    for r, dt in zip(rows, dts):
+        k = key(dt, r["transaction_type"], r["merchant"], r["amount"], r.get("time"))
+        seen[k] += 1
+        if seen[k] <= have[k]:
+            skp += 1
+            continue
+        db.add(TransactionDB(user_id=uid, date=dt, time=r.get("time", "00:00"), amount=float(r["amount"]),
+                             transaction_type=r["transaction_type"], merchant=r["merchant"],
+                             category=r.get("category") or "Other", note=r.get("note", ""),
+                             cashback=r.get("cashback", 0.0), source_file=source))
+        ins += 1
+    db.commit()
+    return ins, skp
+
+def _count(db: Session, uid: int) -> int:
+    return db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
+
+def _user_json(u: UserDB) -> dict:
+    return {"id": u.id, "email": u.email, "name": u.name, "is_admin": bool(u.is_admin)}
 
 
-# ── AUTH ──────────────────────────────────────────────────────────────────────
-
+# ── auth ──────────────────────────────────────────────────────────────────────
 class RegisterReq(BaseModel):
     email: str
-    name:  str
+    name: str
     password: str
 
 class LoginReq(BaseModel):
     email: str
     password: str
 
-@app.post("/api/auth/register")
-def register(req: RegisterReq, db: Session = Depends(get_db)):
-    if db.query(UserDB).filter(UserDB.email == req.email).first():
-        raise HTTPException(400, "Email already registered")
-    user = UserDB(email=req.email, name=req.name, hashed_pw=hash_pw(req.password))
-    db.add(user); db.commit(); db.refresh(user)
-    token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
-
-@app.post("/api/auth/login")
-def login(req: LoginReq, db: Session = Depends(get_db)):
-    user = db.query(UserDB).filter(UserDB.email == req.email).first()
-    if not user or not verify_pw(req.password, user.hashed_pw):
-        raise HTTPException(401, "Invalid email or password")
-    try:
-        user.last_seen = datetime.utcnow(); db.commit()
-    except Exception: db.rollback()
-    token = create_token({"sub": user.email, "uid": user.id})
-    return {"token": token, "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}}
-
-
-
 class ChangePwReq(BaseModel):
     current_password: str
     new_password: str
 
+class HeartbeatReq(BaseModel):
+    tab: str = ""
+
+@app.post("/api/auth/register")
+def register(req: RegisterReq, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    if "@" not in email or len(req.password) < 6 or not req.name.strip():
+        raise HTTPException(400, "Enter a name, a valid email and a password of 6+ characters")
+    if db.query(UserDB).filter(func.lower(UserDB.email) == email).first():
+        raise HTTPException(400, "Email already registered")
+    u = UserDB(email=email, name=req.name.strip()[:60], hashed_pw=hash_pw(req.password),
+               created_at=datetime.utcnow(), last_seen=datetime.utcnow())
+    db.add(u); db.commit(); db.refresh(u)
+    return {"token": create_token({"sub": u.email, "uid": u.id}), "user": _user_json(u)}
+
+@app.post("/api/auth/login")
+def login(req: LoginReq, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    u = db.query(UserDB).filter(func.lower(UserDB.email) == email).first()
+    if not u or not verify_pw(req.password, u.hashed_pw):
+        raise HTTPException(401, "Invalid email or password")
+    u.last_seen = datetime.utcnow(); u.last_activity = "Signed in"
+    db.commit()
+    return {"token": create_token({"sub": u.email, "uid": u.id}), "user": _user_json(u)}
+
+@app.get("/api/auth/me")
+def me(user: UserDB = Depends(require_user)):
+    return _user_json(user)
+
 @app.post("/api/auth/change-password")
-def change_password(req: ChangePwReq, db: Session = Depends(get_db),
-                    user = Depends(require_user)):
+def change_password(req: ChangePwReq, db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
     if not verify_pw(req.current_password, user.hashed_pw):
-        raise HTTPException(400, "Current password incorrect")
+        raise HTTPException(400, "Current password is incorrect")
+    if len(req.new_password) < 6:
+        raise HTTPException(400, "New password must be at least 6 characters")
     user.hashed_pw = hash_pw(req.new_password)
     db.commit()
     return {"ok": True}
 
-@app.get("/api/auth/me")
-def me(user: UserDB = Depends(require_user)):
-    return {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(getattr(user, "is_admin", False))}
+@app.post("/api/auth/logout")
+def logout(db: Session = Depends(get_db), user: Optional[UserDB] = Depends(get_current_user)):
+    if user:                                   # show as offline in the admin console straight away
+        user.last_seen = datetime.utcnow() - timedelta(hours=1)
+        user.last_activity = ""
+        db.commit()
+    return {"ok": True}
+
+@app.post("/api/heartbeat")
+def heartbeat(req: HeartbeatReq, db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    user.last_seen = datetime.utcnow()
+    user.last_activity = (req.tab or "")[:40]
+    db.commit()
+    return {"ok": True}
 
 
-# ── UPLOAD ───────────────────────────────────────────────────────────────────
-
+# ── upload ────────────────────────────────────────────────────────────────────
 @app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...),
-                     db: Session = Depends(get_db),
-                     user = Depends(get_current_user)):
-    txns = _parser.parse_pdf(io.BytesIO(await file.read()))
-    rows = [{**t.model_dump(), 'date': t.date.isoformat()} for t in txns]
-    uid  = user.id if user else None
-    ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
-    return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
+async def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db),
+                     user: UserDB = Depends(require_user)):
+    try:
+        txns = _pdf.parse_pdf(io.BytesIO(await file.read()))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read this PDF ({type(e).__name__})")
+    rows = [{**t.model_dump(), "date": t.date.isoformat()} for t in txns]
+    if not rows:
+        raise HTTPException(400, "No transactions found in this PDF. Try the CSV export instead.")
+    ins, skp = _dedup_insert(db, rows, file.filename, user.id)
+    return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp,
+                               "total_stored": _count(db, user.id), "format": "PDF"}))
 
 @app.post("/api/upload-csv")
-async def upload_csv(file: UploadFile = File(...),
-                     db: Session = Depends(get_db),
-                     user = Depends(get_current_user)):
+async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db),
+                     user: UserDB = Depends(require_user)):
     content = await file.read()
-    rows = []
-
-    # 1. PhonePe (tab/comma, Date header, CREDIT/DEBIT column)
-    try:
-        rows = _parse_phonepay_csv(content)
-        if rows: print(f"PhonePe: {len(rows)} txns")
-    except Exception as e:
-        print(f"PhonePe failed: {e}")
-
-    # 2. GPay CSV ("Paid to/Received from" pattern)
+    rows, fmt = parse_any_csv(content)
     if not rows:
-        try:
-            rows = _parse_gpay_csv(content)
-            if rows: print(f"GPay: {len(rows)} txns")
-        except Exception as e:
-            print(f"GPay failed: {e}")
-
-    # 3. SuperMoney (positional, skiprows=1)
-    if not rows:
-        try:
-            df = pd.read_csv(io.BytesIO(content), skiprows=1, header=None)
-            rows = _parse_supermoney_df(df)
-            if rows: print(f"SuperMoney: {len(rows)} txns")
-        except: pass
-    if not rows:
-        for skip in [0,1,2]:
-            try:
-                df = pd.read_csv(io.BytesIO(content), skiprows=skip)
-                df.columns = [str(c).strip().lower() for c in df.columns]
-                df = df.replace({np.nan: None})
-                nc = next((c for c in df.columns if any(x in c for x in ['name','merchant','description'])), None)
-                ac = next((c for c in df.columns if 'amount' in c or 'amt' in c), None)
-                dc = next((c for c in df.columns if 'date' in c), None)
-                sc = next((c for c in df.columns if 'status' in c), None)
-                if not all([nc,ac,dc]): continue
-                for _,row in df.iterrows():
-                    try:
-                        m=str(row[nc]).strip(); a=float(str(row[ac]).replace(',','').replace('+','')); d=_parser._parse_date(str(row[dc]))
-                        if not m or not d or m=='nan': continue
-                        rows.append({'date':d.isoformat(),'time':'00:00','amount':abs(a),
-                            'transaction_type':'sent' if a<0 else 'received','merchant':m[:100],
-                            'note':str(row[sc]) if sc else '','cashback':0.0,'category':_parser._categorize_merchant(m)})
-                    except: continue
-                if rows: break
-            except: continue
-    if not rows: raise HTTPException(400, "Could not parse CSV")
-    uid = user.id if user else None
-    ins, skp = _dedup_insert(db, rows, file.filename, uid)
-    total = db.query(TransactionDB).filter(TransactionDB.user_id == uid).count()
-    return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp, "total_stored": total}))
+        raise HTTPException(400, "Could not read this file. Supported: PhonePe, Google Pay and SuperMoney exports.")
+    ins, skp = _dedup_insert(db, rows, file.filename, user.id)
+    return JSONResponse(_safe({"count": len(rows), "inserted": ins, "skipped": skp,
+                               "total_stored": _count(db, user.id), "format": fmt}))
 
 
-# ── DATA ─────────────────────────────────────────────────────────────────────
-
+# ── data ──────────────────────────────────────────────────────────────────────
 @app.get("/api/transactions")
-def get_transactions(date_from:str=None, date_to:str=None,
-                     db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    txns = _query(db, uid, date_from, date_to, all_rows=True)
-    return JSONResponse(_safe({"transactions":[_row(t) for t in txns],"count":len(txns)}))
+def get_transactions(date_from: str = None, date_to: str = None, db: Session = Depends(get_db),
+                     user: UserDB = Depends(require_user)):
+    txns = _query(db, user.id, date_from, date_to, all_rows=True)
+    return JSONResponse(_safe({"transactions": [_row(t) for t in txns], "count": len(txns)}))
 
 @app.delete("/api/transactions")
-def clear(db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    q = db.query(TransactionDB)
-    if uid: q = q.filter(TransactionDB.user_id == uid)
-    q.delete(); db.commit()
+def clear_transactions(db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    db.query(TransactionDB).filter(TransactionDB.user_id == user.id).delete()
+    db.commit()
     return {"cleared": True}
 
 @app.get("/api/analytics")
-def analytics(date_from:str=None, date_to:str=None,
-              db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    txns = _query(db, uid, date_from, date_to)
-    if not txns: raise HTTPException(404, "No transactions in selected range")
-    objs = [Transaction(date=t.date, time=t.time, amount=t.amount,
-                        transaction_type=t.transaction_type, merchant=t.merchant,
-                        category=t.category, note=t.note, cashback=t.cashback) for t in txns]
-    return JSONResponse(_safe(AnalyticsEngine(objs).get_analytics()))
+def analytics(date_from: str = None, date_to: str = None, db: Session = Depends(get_db),
+              user: UserDB = Depends(require_user)):
+    txns = _query(db, user.id, date_from, date_to)
+    if not txns:
+        raise HTTPException(404, "No transactions in the selected range")
+    return JSONResponse(_safe(AnalyticsEngine(_to_models(txns)).get_analytics()))
 
 @app.get("/api/date-range")
-def date_range(db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    q = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date), func.count(TransactionDB.id))
-    if uid: q = q.filter(TransactionDB.user_id == uid)
-    row = q.first()
-    return {"min": row[0].date().isoformat() if row[0] else None,
-            "max": row[1].date().isoformat() if row[1] else None, "count": row[2]}
-
-
-# ── RAG ───────────────────────────────────────────────────────────────────────
-
-class RAGReq(BaseModel):
-    question: str
-
-@app.post("/api/rag/index")
-def rag_index(date_from:str=None, date_to:str=None,
-              db:Session=Depends(get_db), user=Depends(get_current_user)):
-    uid = user.id if user else None
-    txns = _query(db, uid, date_from, date_to)
-    if not txns: raise HTTPException(400, "No transactions")
-    return rag_service.index_transactions([_row(t) for t in txns])
-
-@app.post("/api/rag/query")
-def rag_query(req: RAGReq, db: Session = Depends(get_db),
-              user = Depends(require_user)):
-    if not req.question.strip(): raise HTTPException(400, "Empty")
-    uid = user.id
-    txns = _query(db, uid, all_rows=False)
-    if not txns:
-        return {"answer": "No transactions found. Upload a CSV first.",
-                "sources": [], "provider": "none"}
-    from .analytics import AnalyticsEngine
-    from .models import Transaction
-    objs = [Transaction(
-        date=t.date, time=t.time, amount=t.amount,
-        transaction_type=t.transaction_type, merchant=t.merchant,
-        category=getattr(t,"custom_category",None) or t.category,
-        note=t.note, cashback=t.cashback
-    ) for t in txns]
-    a = AnalyticsEngine(objs).get_analytics()
-    dates = sorted([t.date for t in txns])
-    date_range = f"{dates[0].strftime('%d %b %Y')} to {dates[-1].strftime('%d %b %Y')}" if dates else ""
-    stats = {
-        "total_transactions":   len(txns),
-        "total_spent":          a.get("total_spent", 0),
-        "total_received":       a.get("total_received", 0),
-        "total_cashback":       a.get("total_cashback", 0),
-        "highest_expense":      max((t.amount for t in objs if t.transaction_type=="sent"), default=0),
-        "category_breakdown":   a.get("category_breakdown", {}),
-        "top_merchants":        a.get("top_merchants", []),
-        "top_received_sources": a.get("top_received_sources", []),
-        "monthly_trend":        a.get("monthly_trend", {}),
-        "recurring_merchants":  a.get("recurring_merchants", []),
-        "largest_transactions": a.get("largest_transactions", []),
-        "date_range":           date_range,
-    }
-    return rag_service.query(req.question, user_id=uid, external_stats=stats)
-
-@app.get("/api/rag/status")
-def rag_status(db:Session=Depends(get_db)):
-    col = rag_service._get_collection()
-    return {"ollama": rag_service.ollama_status(),
-            "indexed_count": col.count(),
-            "transactions_loaded": db.query(TransactionDB).count()}
-
-
+def date_range(db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    lo, hi, n = db.query(func.min(TransactionDB.date), func.max(TransactionDB.date),
+                         func.count(TransactionDB.id)).filter(TransactionDB.user_id == user.id).first()
+    return {"min": lo.date().isoformat() if lo else None,
+            "max": hi.date().isoformat() if hi else None, "count": n or 0}
 
 class UpdateTxnReq(BaseModel):
     included: Optional[bool] = None
     category: Optional[str] = None
 
-@app.patch("/api/transactions/{txn_id}")
-def update_transaction(txn_id: int, req: UpdateTxnReq,
-                       db: Session = Depends(get_db), user = Depends(get_current_user)):
-    uid = user.id if user else None
-    q = db.query(TransactionDB).filter(TransactionDB.id == txn_id)
-    if uid: q = q.filter(TransactionDB.user_id == uid)
-    t = q.first()
-    if not t: raise HTTPException(404, "Transaction not found")
+def _categories_for(db: Session, uid: int) -> List[str]:
+    custom = {r[0] for r in db.query(TransactionDB.custom_category)
+              .filter(TransactionDB.user_id == uid, TransactionDB.custom_category.isnot(None)).all() if r[0]}
+    return sorted(set(DEFAULT_CATEGORIES) | custom)
 
+@app.patch("/api/transactions/{txn_id}")
+def update_transaction(txn_id: int, req: UpdateTxnReq, db: Session = Depends(get_db),
+                       user: UserDB = Depends(require_user)):
+    t = db.query(TransactionDB).filter(TransactionDB.id == txn_id, TransactionDB.user_id == user.id).first()
+    if not t:
+        raise HTTPException(404, "Transaction not found")
     if req.included is not None:
         t.included = req.included
     if req.category is not None:
-        # Store as custom_category if different from auto-detected
-        try:
-            t.custom_category = req.category if req.category != t.category else None
-        except Exception:
-            pass  # column not yet in DB
-
+        cat = req.category.strip()[:40]
+        if not cat:
+            raise HTTPException(400, "Category cannot be empty")
+        t.custom_category = None if cat == t.category else cat
     db.commit()
     row = _row(t)
-    try:
-        cq = db.query(TransactionDB.custom_category).filter(
-            TransactionDB.custom_category.isnot(None), TransactionDB.user_id == uid)
-        custom = sorted({r[0] for r in cq.all() if r[0]})
-        default = ['Credit Card','Education','Entertainment','Food & Grocery',
-                   'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities']
-        row['all_categories'] = sorted(set(default + custom))
-    except: pass
+    row["all_categories"] = _categories_for(db, user.id)
     return row
 
-
 @app.get("/api/categories")
-def get_categories(db: Session = Depends(get_db), user = Depends(get_current_user)):
-    uid = user.id if user else None
-    q = db.query(TransactionDB.custom_category).filter(TransactionDB.custom_category.isnot(None))
-    if uid: q = q.filter(TransactionDB.user_id == uid)
-    custom = list({r[0] for r in q.all() if r[0]})
-
-    default = ['Credit Card','Healthcare','Travel','Shopping','Food & Grocery',
-               'Transport','Utilities','Entertainment','Education','Transfer','Other']
-    all_cats = sorted(set(default + custom))
-    return {"categories": all_cats, "custom": custom}
+def get_categories(db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    return {"categories": _categories_for(db, user.id)}
 
 
+# ── AI / RAG ──────────────────────────────────────────────────────────────────
+class RAGReq(BaseModel):
+    question: str
 
-class SMSSyncReq(BaseModel):
-    transactions: list[dict]
+def _rag_context(db: Session, uid: int):
+    txns = _query(db, uid)
+    if not txns:
+        return None, None
+    stats = AnalyticsEngine(_to_models(txns)).get_analytics()
+    dates = [t.date for t in txns]
+    stats["date_range"] = f"{min(dates):%d %b %Y} to {max(dates):%d %b %Y}"
+    docs = rag_service.build_docs([_row(t) for t in txns])
+    return stats, docs
 
-@app.post("/api/sms/sync")
-def sms_sync(req: SMSSyncReq, db: Session = Depends(get_db), user = Depends(get_current_user)):
-    uid = user.id if user else None
-    rows = []
-    for t in req.transactions:
-        dt = t.get("date")
-        if isinstance(dt, str):
-            try: dt = datetime.fromisoformat(dt)
-            except: continue
-        rows.append({
-            "date": dt.isoformat(), "time": t.get("time","00:00"),
-            "amount": float(t.get("amount",0)),
-            "transaction_type": t.get("transaction_type","sent"),
-            "merchant": str(t.get("merchant","Unknown"))[:100],
-            "category": t.get("category","Other"),
-            "note": t.get("note","SUCCESS"),
-            "cashback": float(t.get("cashback",0)),
-        })
-    ins, skp = _dedup_insert(db, rows, "sms", uid)
-    total = db.query(TransactionDB).filter(
-        TransactionDB.user_id == uid
-    ).count()
-    return {"inserted": ins, "skipped": skp, "total_stored": total}
+@app.get("/api/rag/status")
+def rag_status(user: Optional[UserDB] = Depends(get_current_user)):
+    st = rag_service.index_state(str(user.id)) if user else {"status": "none", "count": 0}
+    return {"ai": rag_service.ai_status(), "index": st}
 
+@app.post("/api/rag/index")
+def rag_index(db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    stats, docs = _rag_context(db, user.id)
+    if not docs:
+        return {"indexed": 0, "status": "empty"}
+    status = rag_service.ensure_index(str(user.id), docs)
+    return {"indexed": len(docs), "status": status}
 
-
-@app.get("/api/admin/stats")
-def admin_stats(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    from sqlalchemy import func
-    from datetime import timedelta
-    now = datetime.utcnow()
-    total_users  = db.query(func.count(UserDB.id)).scalar() or 0
-    total_txns   = db.query(func.count(TransactionDB.id)).scalar() or 0
-    online_users = db.query(func.count(UserDB.id)).filter(
-        UserDB.last_seen >= now - timedelta(minutes=5)).scalar() or 0
-    new_today = db.query(func.count(UserDB.id)).filter(
-        UserDB.created_at >= now.replace(hour=0,minute=0,second=0,microsecond=0)).scalar() or 0
-    return {"total_users":total_users,"online_now":online_users,
-            "new_today":new_today,"total_txns":total_txns}
+@app.post("/api/rag/query")
+def rag_query(req: RAGReq, db: Session = Depends(get_db), user: UserDB = Depends(require_user)):
+    q = req.question.strip()
+    if not q:
+        raise HTTPException(400, "Ask a question first")
+    stats, docs = _rag_context(db, user.id)
+    if not docs:
+        return {"answer": "You have no transactions yet. Import a statement first.", "sources": [], "provider": "none"}
+    try:
+        return rag_service.query(q[:500], user.id, stats, docs)
+    except Exception as e:
+        print(f"[rag] query crashed: {type(e).__name__}: {e}")
+        return {"answer": f"The AI hit an unexpected error ({type(e).__name__}). Please try again.",
+                "sources": [], "provider": "none", "error": str(e)[:200]}
 
 
-@app.get("/api/admin/users")
-def admin_users(db: Session = Depends(get_db), admin = Depends(require_admin)):
-    from sqlalchemy import func
-    from datetime import timedelta
-    now = datetime.utcnow()
-    users = db.query(UserDB).all()
-    result = []
-    for u in users:
-        txn_count = db.query(func.count(TransactionDB.id)).filter(
-            TransactionDB.user_id == u.id).scalar() or 0
-        latest = db.query(TransactionDB.date).filter(
-            TransactionDB.user_id == u.id).order_by(TransactionDB.date.desc()).first()
-        last   = getattr(u, "last_seen", None)
-        online = bool(last and (now - last).total_seconds() < 300)
-        result.append({
-            "id": u.id, "email": u.email, "name": u.name,
-            "is_admin": bool(getattr(u,"is_admin",False)),
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-            "last_seen": last.isoformat() if last else None,
-            "online": online, "txn_count": txn_count,
-            "latest_txn_date": latest[0].isoformat() if latest else None,
-        })
-    result.sort(key=lambda x:(x["online"],x["last_seen"] or ""),reverse=True)
-    return {"users":result,"total":len(result),
-            "online_now":sum(1 for u in result if u["online"])}
+# ── about + suggestions ───────────────────────────────────────────────────────
+@app.get("/api/about")
+def get_about(db: Session = Depends(get_db)):
+    data = dict(DEFAULT_ABOUT)
+    for r in db.query(SiteContent).all():
+        if r.key in ABOUT_KEYS:
+            data[r.key] = r.value
+    return data
 
+@app.put("/api/about")
+def update_about(data: dict, db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    for k, v in data.items():
+        if k not in ABOUT_KEYS:
+            continue
+        row = db.query(SiteContent).filter(SiteContent.key == k).first()
+        if row:
+            row.value, row.updated_at, row.updated_by = str(v)[:6000], datetime.utcnow(), admin.id
+        else:
+            db.add(SiteContent(key=k, value=str(v)[:6000], updated_by=admin.id))
+    db.commit()
+    return get_about(db)
 
-@app.delete("/api/admin/users/{user_id}")
-def admin_delete_user(user_id: int, db: Session = Depends(get_db),
-                      admin = Depends(require_admin)):
-    user = db.query(UserDB).filter(UserDB.id == user_id).first()
-    if not user: raise HTTPException(404, "User not found")
-    if user.email == admin.email: raise HTTPException(400, "Cannot delete yourself")
-    db.query(TransactionDB).filter(TransactionDB.user_id == user_id).delete()
-    db.delete(user); db.commit()
+class SuggestionReq(BaseModel):
+    title: str
+    message: str
+    category: str = "feature"
+
+@app.post("/api/suggestions")
+def submit_suggestion(req: SuggestionReq, db: Session = Depends(get_db),
+                      user: Optional[UserDB] = Depends(get_current_user)):
+    title, msg = req.title.strip(), req.message.strip()
+    if len(title) < 3 or len(msg) < 10:
+        raise HTTPException(400, "Please add a short title and a few words of detail")
+    since = datetime.utcnow() - timedelta(days=1)
+    if user and db.query(Suggestion).filter(Suggestion.user_id == user.id, Suggestion.created_at >= since).count() >= 10:
+        raise HTTPException(429, "Daily suggestion limit reached, thank you!")
+    cat = req.category if req.category in ("feature", "bug", "design", "other") else "other"
+    db.add(Suggestion(user_id=user.id if user else None, user_name=user.name if user else "Anonymous",
+                      user_email=user.email if user else None, category=cat,
+                      title=title[:120], message=msg[:1500]))
+    db.commit()
     return {"ok": True}
 
+
+# ── admin ─────────────────────────────────────────────────────────────────────
+ONLINE_SECONDS = 150   # frontend heartbeats every 30s
+
+def _is_online(u: UserDB, now: datetime) -> bool:
+    return bool(u.last_seen and (now - u.last_seen).total_seconds() < ONLINE_SECONDS)
+
+@app.get("/api/admin/stats")
+def admin_stats(db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    now = datetime.utcnow()
+    return {
+        "total_users": db.query(func.count(UserDB.id)).scalar() or 0,
+        "online_now": db.query(func.count(UserDB.id)).filter(
+            UserDB.last_seen >= now - timedelta(seconds=ONLINE_SECONDS)).scalar() or 0,
+        "new_today": db.query(func.count(UserDB.id)).filter(
+            UserDB.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0)).scalar() or 0,
+        "total_txns": db.query(func.count(TransactionDB.id)).scalar() or 0,
+        "new_suggestions": db.query(func.count(Suggestion.id)).filter(Suggestion.status == "new").scalar() or 0,
+    }
+
+@app.get("/api/admin/users")
+def admin_users(db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    now = datetime.utcnow()
+    counts = dict(db.query(TransactionDB.user_id, func.count(TransactionDB.id)).group_by(TransactionDB.user_id).all())
+    latest = dict(db.query(TransactionDB.user_id, func.max(TransactionDB.date)).group_by(TransactionDB.user_id).all())
+    sugg = dict(db.query(Suggestion.user_id, func.count(Suggestion.id)).group_by(Suggestion.user_id).all())
+    out = []
+    for u in db.query(UserDB).all():
+        online = _is_online(u, now)
+        out.append({"id": u.id, "name": u.name, "email": u.email, "is_admin": bool(u.is_admin),
+                    "created_at": u.created_at.isoformat() if u.created_at else None,
+                    "last_seen": u.last_seen.isoformat() if u.last_seen else None,
+                    "online": online, "activity": (u.last_activity or "") if online else "",
+                    "txn_count": counts.get(u.id, 0),
+                    "latest_txn_date": latest[u.id].isoformat() if latest.get(u.id) else None,
+                    "suggestions": sugg.get(u.id, 0)})
+    out.sort(key=lambda x: (x["online"], x["last_seen"] or ""), reverse=True)
+    return {"users": out, "total": len(out), "online_now": sum(1 for x in out if x["online"])}
+
+class RoleReq(BaseModel):
+    is_admin: bool
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_set_role(user_id: int, req: RoleReq, db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    u = db.query(UserDB).filter(UserDB.id == user_id).first()
+    if not u: raise HTTPException(404, "User not found")
+    if u.id == admin.id and not req.is_admin: raise HTTPException(400, "You cannot remove your own admin role")
+    u.is_admin = req.is_admin
+    db.commit()
+    return {"ok": True}
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    u = db.query(UserDB).filter(UserDB.id == user_id).first()
+    if not u: raise HTTPException(404, "User not found")
+    if u.id == admin.id: raise HTTPException(400, "You cannot delete yourself")
+    db.query(TransactionDB).filter(TransactionDB.user_id == u.id).delete()
+    db.delete(u)
+    db.commit()
+    return {"ok": True}
+
+@app.get("/api/admin/suggestions")
+def admin_suggestions(db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    rows = db.query(Suggestion).order_by(Suggestion.created_at.desc()).all()
+    return {"suggestions": [{"id": r.id, "user_id": r.user_id, "user_name": r.user_name,
+                             "user_email": r.user_email, "category": r.category or "other",
+                             "title": r.title, "message": r.message, "status": r.status,
+                             "created_at": r.created_at.isoformat()} for r in rows]}
+
+class StatusReq(BaseModel):
+    status: str
+
+@app.patch("/api/admin/suggestions/{sid}")
+def admin_update_suggestion(sid: int, req: StatusReq, db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    s = db.query(Suggestion).filter(Suggestion.id == sid).first()
+    if not s: raise HTTPException(404, "Not found")
+    if req.status not in ("new", "reviewed", "done"): raise HTTPException(400, "Bad status")
+    s.status = req.status
+    db.commit()
+    return {"ok": True}
+
+@app.delete("/api/admin/suggestions/{sid}")
+def admin_delete_suggestion(sid: int, db: Session = Depends(get_db), admin: UserDB = Depends(require_admin)):
+    s = db.query(Suggestion).filter(Suggestion.id == sid).first()
+    if s:
+        db.delete(s); db.commit()
+    return {"ok": True}
+
+
 @app.get("/api/health")
-def health(): return {"status": "ok"}
+def health():
+    return {"status": "ok"}
+
+@app.get("/")
+def root():
+    return {"service": "UPI Analyzer API", "status": "ok"}

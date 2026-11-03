@@ -1,0 +1,575 @@
+<!-- ═══════════════ SIGN IN / REGISTER ═══════════════ -->
+<div class="auth-screen" *ngIf="!user">
+  <div class="auth-card">
+    <div class="logo">₹</div>
+    <h1>UPI Analyzer</h1>
+    <p class="muted">Understand your UPI spending, month after month.</p>
+
+    <div class="seg">
+      <button [class.on]="authMode==='login'" (click)="authMode='login'; authError=''">Sign in</button>
+      <button [class.on]="authMode==='register'" (click)="authMode='register'; authError=''">Create account</button>
+    </div>
+
+    <input class="inp" *ngIf="authMode==='register'" [(ngModel)]="authName" placeholder="Full name" autocomplete="name">
+    <input class="inp" [(ngModel)]="authEmail" placeholder="Email" type="email" autocomplete="email">
+    <input class="inp" [(ngModel)]="authPassword" placeholder="Password (6+ characters)" type="password"
+           autocomplete="current-password" (keydown.enter)="submitAuth()">
+    <div class="form-err" *ngIf="authError">{{ authError }}</div>
+    <button class="btn-primary block" (click)="submitAuth()" [disabled]="authLoading">
+      {{ authLoading ? 'Please wait…' : (authMode==='login' ? 'Sign in' : 'Create account') }}
+    </button>
+    <p class="tiny muted center" *ngIf="authLoading">The server may take ~30 seconds to wake up after being idle.</p>
+    <div class="brand-foot">Made by AM</div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP SHELL ═══════════════ -->
+<div class="shell" *ngIf="user">
+
+  <aside class="sidebar" [class.open]="sidebarOpen">
+    <div class="sb-brand">
+      <div class="logo sm">₹</div>
+      <div class="sb-brand-text">
+        <div class="sb-name">UPI Analyzer</div>
+        <div class="sb-user" [title]="user.email">{{ user.name }}<span class="role-tag" *ngIf="isAdmin">admin</span></div>
+      </div>
+    </div>
+
+    <nav class="sb-nav">
+      <button class="nav" [class.on]="tab==='overview'" (click)="go('overview')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Overview
+      </button>
+      <button class="nav" [class.on]="tab==='analytics'" (click)="go('analytics')">
+        <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Analytics
+      </button>
+      <button class="nav" [class.on]="tab==='transactions'" (click)="go('transactions')">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Transactions
+        <span class="count" *ngIf="totalStored">{{ totalStored }}</span>
+      </button>
+      <button class="nav" [class.on]="tab==='ai'" (click)="go('ai')">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        AI Chat
+        <span class="live-dot" *ngIf="ai?.running"></span>
+      </button>
+      <button class="nav" [class.on]="tab==='about'" (click)="go('about')">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        About
+      </button>
+      <button class="nav admin" *ngIf="isAdmin" [class.on]="tab==='admin'" (click)="go('admin')">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Admin
+        <span class="count amber" *ngIf="adminStats?.new_suggestions">{{ adminStats.new_suggestions }}</span>
+      </button>
+    </nav>
+
+    <div class="sb-spacer"></div>
+
+    <div class="sb-block" *ngIf="totalStored">
+      <div class="sb-label">Date range</div>
+      <div class="date-row">
+        <input type="date" class="inp date" [ngModel]="filterFrom" (ngModelChange)="filterFrom=$event; onDates()" [attr.min]="dateMin" [attr.max]="dateMax">
+        <input type="date" class="inp date" [ngModel]="filterTo" (ngModelChange)="filterTo=$event; onDates()" [attr.min]="dateMin" [attr.max]="dateMax">
+      </div>
+      <div class="quick">
+        <button (click)="allTime()" [class.on]="!filterFrom && !filterTo">All time</button>
+        <button (click)="thisMonth()">This month</button>
+        <button (click)="lastDays(30)">30 days</button>
+        <button (click)="lastDays(90)">90 days</button>
+      </div>
+      <div class="tiny muted">Data from {{ dateMin }} to {{ dateMax }}</div>
+    </div>
+
+    <div class="sb-block">
+      <label class="btn-import" [class.busy]="uploading">
+        <input type="file" accept=".csv,.pdf" (change)="onFile($event)" [disabled]="uploading" hidden>
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        {{ uploading ? 'Importing…' : 'Import CSV / PDF' }}
+      </label>
+      <button class="link danger" *ngIf="totalStored" (click)="clearAll()">Delete all my data</button>
+      <button class="link" (click)="showPw=true">Change password</button>
+      <button class="link" (click)="logout()">Sign out</button>
+      <div class="brand-foot left">Made by AM</div>
+    </div>
+  </aside>
+
+  <div class="overlay" *ngIf="sidebarOpen" (click)="sidebarOpen=false"></div>
+
+  <div class="main">
+    <header class="bar">
+      <button class="burger" (click)="sidebarOpen=!sidebarOpen" aria-label="Menu">
+        <svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <h2>{{ title }}</h2>
+      <span class="range-chip" *ngIf="totalStored && (tab==='overview' || tab==='analytics' || tab==='transactions')">{{ rangeLabel }}</span>
+      <span class="spacer"></span>
+      <span class="brand-foot inline">Made by AM</span>
+    </header>
+
+    <div class="content" [class.fill]="tab==='ai'">
+
+      <!-- ═══════════ OVERVIEW ═══════════ -->
+      <section *ngIf="tab==='overview'">
+        <div class="empty" *ngIf="!totalStored">
+          <div class="empty-icon">⬆</div>
+          <h3>Import your first statement</h3>
+          <p class="muted">Upload a PhonePe, Google Pay or SuperMoney export (CSV or PDF). Every upload is saved and
+             merged with what you already have, so you can add new months any time.</p>
+          <div class="row center">
+            <label class="btn-primary">Choose file<input type="file" accept=".csv,.pdf" (change)="onFile($event)" hidden></label>
+            <button class="btn-ghost" (click)="downloadSample()">Download sample</button>
+          </div>
+        </div>
+
+        <div class="empty slim" *ngIf="totalStored && !analytics && !loadingData">
+          <p class="muted">No transactions in this date range.</p>
+          <button class="btn-ghost" (click)="allTime()">Show all time</button>
+        </div>
+
+        <ng-container *ngIf="analytics as a">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-n">{{ inr(a.total_spent) }}</div><div class="kpi-l">Spent</div><div class="kpi-s">{{ inr(a.avg_per_day) }} / day</div></div>
+            <div class="kpi"><div class="kpi-n pos">{{ inr(a.total_received) }}</div><div class="kpi-l">Received</div><div class="kpi-s">{{ a.received_count }} payments in</div></div>
+            <div class="kpi"><div class="kpi-n" [class.pos]="a.net_flow>=0" [class.neg]="a.net_flow<0">{{ a.net_flow>=0 ? '+' : '−' }}{{ inr(a.net_flow<0 ? -a.net_flow : a.net_flow) }}</div><div class="kpi-l">Net flow</div></div>
+            <div class="kpi"><div class="kpi-n">{{ a.transaction_count }}</div><div class="kpi-l">Payments</div><div class="kpi-s">{{ inr(a.average_transaction) }} average</div></div>
+            <div class="kpi"><div class="kpi-n">{{ a.days_active }}</div><div class="kpi-l">Days covered</div></div>
+          </div>
+
+          <div class="grid">
+            <div class="card" *ngIf="pieData.length">
+              <h4>Spending by category</h4>
+              <div class="pie-row">
+                <div class="pie-box">
+                  <ngx-charts-pie-chart [results]="pieData" [scheme]="pieScheme" [doughnut]="true" [arcWidth]="0.35"
+                    [legend]="false" [labels]="false" [tooltipDisabled]="false"></ngx-charts-pie-chart>
+                </div>
+                <ul class="legend">
+                  <li *ngFor="let c of pieData | slice:0:8">
+                    <i class="dot" [style.background]="c.color"></i><span class="lg-name">{{ c.name }}</span>
+                    <span class="lg-pct">{{ pct(c.value, a.total_spent) | number:'1.0-0' }}%</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="monthlyData.length">
+              <h4>Monthly spending</h4>
+              <div class="chart-box">
+                <ngx-charts-bar-vertical [results]="monthlyData" [scheme]="schemeMain" [xAxis]="true" [yAxis]="true"
+                  [showDataLabel]="true" [gradient]="false" [yAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-vertical>
+              </div>
+            </div>
+
+            <div class="card wide" *ngIf="compareData.length">
+              <h4>Spent vs received, by month <span class="mini-legend"><span><i style="background:#f87171"></i>Spent</span><span><i style="background:#4ade80"></i>Received</span></span></h4>
+              <div class="chart-box tall">
+                <ngx-charts-bar-vertical-2d [results]="compareData" [scheme]="schemeCompare" [xAxis]="true" [yAxis]="true"
+                  [legend]="false" [showDataLabel]="true" [groupPadding]="18" [barPadding]="4"
+                  [yAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-vertical-2d>
+              </div>
+            </div>
+
+            <div class="card wide" *ngIf="merchantData.length">
+              <h4>Top merchants</h4>
+              <div class="chart-box tall">
+                <ngx-charts-bar-horizontal [results]="merchantData" [scheme]="schemeMain" [xAxis]="true" [yAxis]="true"
+                  [showDataLabel]="true" [gradient]="false" [xAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-horizontal>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="a.largest_transactions?.length">
+              <h4>Largest payments</h4>
+              <ul class="rows">
+                <li *ngFor="let t of a.largest_transactions">
+                  <div><div class="r-name">{{ t.merchant }}</div><div class="r-sub">{{ t.date }} · {{ t.category }}</div></div>
+                  <div class="r-val neg">{{ inr(t.amount) }}</div>
+                </li>
+              </ul>
+            </div>
+
+            <div class="card" *ngIf="recurringTop.length">
+              <h4>Recurring <span class="badge">3+ times</span></h4>
+              <ul class="rows">
+                <li *ngFor="let r of recurringTop">
+                  <div><div class="r-name">{{ r.merchant }}</div><div class="r-sub">{{ r.count }}× · {{ inr(r.avg) }} avg</div></div>
+                  <div class="r-val">{{ inr(r.total) }}</div>
+                </li>
+              </ul>
+            </div>
+
+            <div class="card" *ngIf="weekdayData.length">
+              <h4>Spending by weekday</h4>
+              <div class="chart-box short">
+                <ngx-charts-bar-vertical [results]="weekdayData" [scheme]="schemeMain" [xAxis]="true" [yAxis]="false"
+                  [showDataLabel]="true" [gradient]="false" [dataLabelFormatting]="compact"></ngx-charts-bar-vertical>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="a.failed_transactions?.length">
+              <h4>Failed payments <span class="badge warn">{{ a.failed_count }}</span></h4>
+              <p class="tiny muted">Not counted in your totals.</p>
+              <ul class="rows">
+                <li *ngFor="let f of a.failed_transactions">
+                  <div><div class="r-name">{{ f.merchant }}</div><div class="r-sub">{{ f.date }}</div></div>
+                  <div class="r-val dim">{{ inr(f.amount) }}</div>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </ng-container>
+      </section>
+
+      <!-- ═══════════ ANALYTICS ═══════════ -->
+      <section *ngIf="tab==='analytics'">
+        <div class="empty" *ngIf="!analytics">
+          <h3>{{ totalStored ? 'No data in this range' : 'Nothing to analyse yet' }}</h3>
+          <p class="muted">{{ totalStored ? 'Pick a wider date range.' : 'Import a statement to see detailed analytics.' }}</p>
+          <button class="btn-ghost" *ngIf="totalStored" (click)="allTime()">Show all time</button>
+        </div>
+        <ng-container *ngIf="analytics as a">
+          <div class="strip">
+            <div><div class="kpi-n pos">{{ inr(a.total_received) }}</div><div class="kpi-l">Total received</div></div>
+            <div><div class="kpi-n">{{ a.received_count }}</div><div class="kpi-l">Incoming payments</div></div>
+            <div><div class="kpi-n" [class.pos]="a.net_flow>=0" [class.neg]="a.net_flow<0">{{ a.net_flow>=0 ? '+' : '−' }}{{ inr(a.net_flow<0 ? -a.net_flow : a.net_flow) }}</div><div class="kpi-l">Net flow</div></div>
+            <div><div class="kpi-n">{{ inr(a.total_spent) }}</div><div class="kpi-l">Total spent</div></div>
+          </div>
+
+          <div class="grid">
+            <div class="card wide" *ngIf="compareData.length">
+              <h4>Spent vs received, by month <span class="mini-legend"><span><i style="background:#f87171"></i>Spent</span><span><i style="background:#4ade80"></i>Received</span></span></h4>
+              <div class="chart-box tall">
+                <ngx-charts-bar-vertical-2d [results]="compareData" [scheme]="schemeCompare" [xAxis]="true" [yAxis]="true"
+                  [legend]="false" [showDataLabel]="true" [groupPadding]="18" [barPadding]="4"
+                  [yAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-vertical-2d>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="pieData.length">
+              <h4>Where your money went</h4>
+              <ul class="bars">
+                <li *ngFor="let c of pieData">
+                  <div class="bars-top"><span><i class="dot" [style.background]="c.color"></i>{{ c.name }}</span>
+                    <span>{{ inr(c.value) }} <em>{{ pct(c.value, a.total_spent) | number:'1.0-0' }}%</em></span></div>
+                  <div class="bar-track"><div class="bar-fill" [style.width.%]="pct(c.value, a.total_spent)" [style.background]="c.color"></div></div>
+                </li>
+              </ul>
+            </div>
+
+            <div class="card" *ngIf="incomeData.length">
+              <h4>Who paid you</h4>
+              <div class="chart-box">
+                <ngx-charts-bar-horizontal [results]="incomeData" [scheme]="schemeGreen" [xAxis]="true" [yAxis]="true"
+                  [showDataLabel]="true" [gradient]="false" [xAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-horizontal>
+              </div>
+            </div>
+
+            <div class="card wide" *ngIf="weeklyData.length">
+              <h4>Weekly spending trend</h4>
+              <div class="chart-box">
+                <ngx-charts-line-chart [results]="weeklyData" [scheme]="schemeLine" [xAxis]="true" [yAxis]="true"
+                  [showGridLines]="true" [legend]="false" [autoScale]="true" [yAxisTickFormatting]="compact"></ngx-charts-line-chart>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="weekdayData.length">
+              <h4>Spending by weekday</h4>
+              <div class="chart-box">
+                <ngx-charts-bar-vertical [results]="weekdayData" [scheme]="schemeMain" [xAxis]="true" [yAxis]="true"
+                  [showDataLabel]="true" [gradient]="false" [yAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-vertical>
+              </div>
+            </div>
+
+            <div class="card" *ngIf="merchantData.length">
+              <h4>Top merchants</h4>
+              <div class="chart-box">
+                <ngx-charts-bar-horizontal [results]="merchantData" [scheme]="schemeMain" [xAxis]="true" [yAxis]="true"
+                  [showDataLabel]="true" [gradient]="false" [xAxisTickFormatting]="compact" [dataLabelFormatting]="compact"></ngx-charts-bar-horizontal>
+              </div>
+            </div>
+          </div>
+        </ng-container>
+      </section>
+
+      <!-- ═══════════ TRANSACTIONS ═══════════ -->
+      <section *ngIf="tab==='transactions'">
+        <div class="empty" *ngIf="!transactions.length">
+          <h3>No transactions {{ totalStored ? 'in this range' : 'yet' }}</h3>
+          <button class="btn-ghost" *ngIf="totalStored" (click)="allTime()">Show all time</button>
+        </div>
+        <ng-container *ngIf="transactions.length">
+          <div class="toolbar">
+            <div class="tb-count">{{ filteredTxns.length }} transactions<span *ngIf="excludedCount"> · {{ excludedCount }} left out of analytics</span></div>
+            <div class="tb-filters">
+              <select class="inp sm" [(ngModel)]="fType" (ngModelChange)="applyFilters()">
+                <option value="">All types</option><option value="sent">Sent</option><option value="received">Received</option>
+              </select>
+              <select class="inp sm" [(ngModel)]="fCat" (ngModelChange)="applyFilters()">
+                <option value="">All categories</option>
+                <option *ngFor="let c of txnCategories" [value]="c">{{ c }}</option>
+              </select>
+              <select class="inp sm" [(ngModel)]="fStatus" (ngModelChange)="applyFilters()">
+                <option value="">Included + excluded</option><option value="included">Included only</option><option value="excluded">Excluded only</option>
+              </select>
+              <input class="inp sm search" [(ngModel)]="fSearch" (ngModelChange)="applyFilters()" placeholder="Search merchant…">
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="tbl">
+              <thead><tr>
+                <th>Merchant</th><th class="r">Amount</th><th>Date</th><th>Category</th><th>Status</th><th class="c" title="Count this transaction in analytics">In analytics</th>
+              </tr></thead>
+              <tbody>
+                <tr *ngFor="let t of filteredTxns | slice:0:showN; trackBy: trackId" [class.off]="!t.included">
+                  <td class="t-merchant">{{ t.merchant }}</td>
+                  <td class="r amt" [class.neg]="t.transaction_type==='sent'" [class.pos]="t.transaction_type==='received'">
+                    {{ t.transaction_type==='sent' ? '−' : '+' }}{{ inr(t.amount) }}</td>
+                  <td class="nowrap dim">{{ t.date | date:'d MMM y' }}</td>
+                  <td class="t-cat">
+                    <ng-container *ngIf="editingId!==t.id; else editor">
+                      <button class="cat-chip" [class.custom]="t.custom_category" (click)="startEdit(t)" title="Click to change category">
+                        <i class="dot" [style.background]="colorOf(t.category)"></i>{{ t.category }}<span class="pen">✎</span>
+                      </button>
+                    </ng-container>
+                    <ng-template #editor>
+                      <div class="cat-edit">
+                        <select class="inp sm" [(ngModel)]="editVal">
+                          <option *ngIf="editVal && editVal!=='__new__' && !allCategories.includes(editVal)" [value]="editVal">{{ editVal }}</option>
+                          <option *ngFor="let c of allCategories" [value]="c">{{ c }}</option>
+                          <option value="__new__">＋ New category…</option>
+                        </select>
+                        <input *ngIf="editVal==='__new__'" class="inp sm" [(ngModel)]="editNew" placeholder="Category name" maxlength="40"
+                               (keydown.enter)="saveEdit(t)" (keydown.escape)="cancelEdit()">
+                        <button class="mini ok" (click)="saveEdit(t)">Save</button>
+                        <button class="mini" (click)="cancelEdit()" aria-label="Cancel">✕</button>
+                      </div>
+                    </ng-template>
+                  </td>
+                  <td><span class="status" [class.fail]="t.note==='FAILED'">{{ t.note || '—' }}</span></td>
+                  <td class="c">
+                    <button class="switch" [class.on]="t.included" (click)="toggleIncluded(t)" role="switch"
+                            [attr.aria-checked]="t.included" [title]="t.included ? 'Counted in analytics. Click to leave out.' : 'Left out. Click to include.'"><span></span></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <button class="more" *ngIf="filteredTxns.length>showN" (click)="showN=showN+100">
+              Show more ({{ filteredTxns.length-showN }} remaining)
+            </button>
+          </div>
+        </ng-container>
+      </section>
+
+      <!-- ═══════════ AI CHAT ═══════════ -->
+      <section class="ai" *ngIf="tab==='ai'">
+        <div class="ai-head">
+          <span class="pill" [class.ok]="ai?.running" [class.bad]="ai && !ai.running">
+            ● {{ !ai ? 'Checking AI…' : ai.running ? 'AI online · ' + ai.model : 'AI offline' }}
+          </span>
+          <span class="tiny muted" *ngIf="ai && !ai.running">{{ ai.error }}</span>
+          <span class="tiny muted" *ngIf="ai?.running && index">
+            Search: {{ index.status==='ready' ? 'semantic (' + index.count + ' transactions indexed)' : index.status==='indexing' ? 'indexing…' : 'keyword' }}
+          </span>
+          <span class="spacer"></span>
+          <button class="btn-ghost sm" (click)="reindex()" [disabled]="!totalStored">Re-index</button>
+          <button class="btn-ghost sm" *ngIf="messages.length" (click)="clearChat()">Clear chat</button>
+        </div>
+        <div class="chips">
+          <button class="chip" *ngFor="let q of suggestions" (click)="ask(q)" [disabled]="chatLoading || !totalStored">{{ q }}</button>
+        </div>
+        <div class="chat" #chatWin>
+          <div class="chat-empty" *ngIf="!messages.length">
+            <h3>Ask about your spending</h3>
+            <p class="muted">{{ totalStored ? 'Try one of the suggestions above, or type your own question.' : 'Import a statement first, then ask away.' }}</p>
+          </div>
+          <div class="msg" *ngFor="let m of messages" [class.me]="m.role==='user'">
+            <div class="bubble" [class.err]="m.error">
+              <span class="typing" *ngIf="m.loading"><i></i><i></i><i></i></span>
+              <span *ngIf="!m.loading" [innerHTML]="md(m.text)"></span>
+              <div class="meta" *ngIf="m.meta">{{ m.meta }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <input class="inp" [(ngModel)]="question" (keydown.enter)="send()" [disabled]="chatLoading"
+                 placeholder="e.g. How much did I spend on food in May?" maxlength="500">
+          <button class="btn-primary" (click)="send()" [disabled]="chatLoading || !question.trim()">Send</button>
+        </div>
+      </section>
+
+      <!-- ═══════════ ABOUT ═══════════ -->
+      <section *ngIf="tab==='about'">
+        <div class="about-grid">
+
+          <article class="card about" *ngIf="!editingAbout">
+            <div class="about-hero">
+              <div class="logo">₹</div>
+              <h1>{{ about.about_title }}</h1>
+              <p class="muted">{{ about.about_subtitle }}</p>
+            </div>
+            <div class="about-block" *ngFor="let b of aboutBlocks">
+              <h4 *ngIf="b.title">{{ b.title }}</h4>
+              <ul *ngIf="b.items && !b.ordered" class="ul"><li *ngFor="let i of b.items">{{ i }}</li></ul>
+              <ol *ngIf="b.items && b.ordered" class="ol"><li *ngFor="let i of b.items">{{ i }}</li></ol>
+              <p *ngIf="b.text">{{ b.text }}</p>
+            </div>
+            <div class="about-foot">
+              <span class="tiny muted">{{ about.about_version }}</span>
+              <button class="btn-ghost sm amber" *ngIf="isAdmin" (click)="startEditAbout()">✎ Edit this page</button>
+            </div>
+          </article>
+
+          <article class="card about" *ngIf="editingAbout && isAdmin">
+            <div class="row between">
+              <h3>Edit About page</h3>
+              <div class="row">
+                <button class="btn-primary sm" (click)="saveAbout()" [disabled]="aboutSaving">{{ aboutSaving ? 'Saving…' : 'Save' }}</button>
+                <button class="btn-ghost sm" (click)="editingAbout=false">Cancel</button>
+              </div>
+            </div>
+            <label class="fl">Title<input class="inp" [(ngModel)]="aboutEdit.about_title"></label>
+            <label class="fl">Subtitle<input class="inp" [(ngModel)]="aboutEdit.about_subtitle"></label>
+            <label class="fl">Body
+              <textarea class="inp" rows="16" [(ngModel)]="aboutEdit.about_body"></textarea>
+            </label>
+            <p class="tiny muted">Tip: separate sections with a blank line. A short first line becomes the heading; lines starting with
+              “•” or “1.” become a list.</p>
+            <label class="fl">Version / footer<input class="inp" [(ngModel)]="aboutEdit.about_version"></label>
+          </article>
+
+          <aside class="card suggest">
+            <ng-container *ngIf="!sgSent">
+              <h3>Help shape this site</h3>
+              <p class="muted">Missing something? Found a bug? Tell us — every suggestion is read.</p>
+
+              <div class="sg-types">
+                <button *ngFor="let c of sgCategories" [class.on]="sgCategory===c.id" (click)="sgCategory=c.id">
+                  <span>{{ c.icon }}</span>{{ c.label }}
+                </button>
+              </div>
+
+              <label class="fl">Title
+                <input class="inp" [(ngModel)]="sgTitle" maxlength="120" placeholder="e.g. Add a budget limit per category">
+                <span class="count-hint">{{ sgTitle.length }}/120</span>
+              </label>
+              <label class="fl">Details
+                <textarea class="inp" rows="5" [(ngModel)]="sgMsg" maxlength="1500" placeholder="What would you like, and why would it help?"></textarea>
+                <span class="count-hint">{{ sgMsg.length }}/1500</span>
+              </label>
+              <div class="form-err" *ngIf="sgError">{{ sgError }}</div>
+              <button class="btn-primary block" (click)="sendSuggestion()" [disabled]="sgSending">
+                {{ sgSending ? 'Sending…' : 'Send suggestion' }}
+              </button>
+            </ng-container>
+
+            <div class="sg-done" *ngIf="sgSent">
+              <div class="tick">✓</div>
+              <h3>Thank you!</h3>
+              <p class="muted">Your suggestion was sent to the admin.</p>
+              <button class="btn-ghost" (click)="newSuggestion()">Send another</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ═══════════ ADMIN ═══════════ -->
+      <section *ngIf="tab==='admin' && isAdmin">
+        <div class="row between wrap">
+          <div>
+            <h3 class="no-m">Admin console</h3>
+            <div class="tiny muted">Live view of everyone using the site · refreshes every 15 s</div>
+          </div>
+          <div class="row">
+            <button class="btn-ghost sm" (click)="go('about'); startEditAbout()">✎ Edit About page</button>
+            <button class="btn-ghost sm" (click)="loadAdmin()" [disabled]="adminLoading">{{ adminLoading ? 'Loading…' : '↻ Refresh' }}</button>
+          </div>
+        </div>
+
+        <div class="kpis admin" *ngIf="adminStats">
+          <div class="kpi"><div class="kpi-n">{{ adminStats.total_users }}</div><div class="kpi-l">Users</div></div>
+          <div class="kpi live"><div class="kpi-n pos">{{ adminStats.online_now }}</div><div class="kpi-l"><i class="live-dot"></i> Online now</div></div>
+          <div class="kpi"><div class="kpi-n">{{ adminStats.new_today }}</div><div class="kpi-l">Joined today</div></div>
+          <div class="kpi"><div class="kpi-n">{{ adminStats.total_txns | number }}</div><div class="kpi-l">Transactions</div></div>
+          <div class="kpi"><div class="kpi-n amber">{{ adminStats.new_suggestions }}</div><div class="kpi-l">New suggestions</div></div>
+        </div>
+
+        <div class="tabs">
+          <button [class.on]="adminTab==='users'" (click)="adminTab='users'">Users <span class="count">{{ adminUsers.length }}</span></button>
+          <button [class.on]="adminTab==='suggestions'" (click)="adminTab='suggestions'">Suggestions
+            <span class="count" [class.amber]="newSuggCount">{{ adminSugg.length }}</span></button>
+        </div>
+
+        <!-- users -->
+        <div class="card flush" *ngIf="adminTab==='users'">
+          <div class="card-tools"><input class="inp sm search" [(ngModel)]="userSearch" placeholder="Search name or email…"></div>
+          <div class="table-wrap bare">
+            <table class="tbl">
+              <thead><tr><th></th><th>User</th><th>Role</th><th class="r">Transactions</th><th>Latest data</th><th>Last active</th><th>Doing now</th><th></th></tr></thead>
+              <tbody>
+                <tr *ngFor="let u of shownUsers" [class.online]="u.online">
+                  <td><i class="presence" [class.on]="u.online" [title]="u.online ? 'Online' : 'Offline'"></i></td>
+                  <td><div class="t-merchant">{{ u.name }}</div><div class="tiny dim">{{ u.email }}</div></td>
+                  <td><span class="role" [class.admin]="u.is_admin">{{ u.is_admin ? 'Admin' : 'User' }}</span></td>
+                  <td class="r">{{ u.txn_count }}</td>
+                  <td class="nowrap dim">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM y') : '—' }}</td>
+                  <td class="nowrap dim" [title]="when(u.last_seen)">{{ u.online ? 'now' : ago(u.last_seen) }}</td>
+                  <td class="nowrap"><span class="doing" *ngIf="u.online && u.activity">{{ u.activity }}</span><span class="dim" *ngIf="!u.online || !u.activity">—</span></td>
+                  <td class="nowrap r">
+                    <button class="mini" (click)="toggleRole(u)" *ngIf="u.id!==user.id">{{ u.is_admin ? 'Remove admin' : 'Make admin' }}</button>
+                    <button class="mini danger" (click)="deleteUser(u)" *ngIf="!u.is_admin">Delete</button>
+                  </td>
+                </tr>
+                <tr *ngIf="!shownUsers.length"><td colspan="8" class="empty-cell">{{ adminLoading ? 'Loading…' : 'No users match.' }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- suggestions -->
+        <div *ngIf="adminTab==='suggestions'">
+          <div class="chips">
+            <button class="chip" *ngFor="let f of ['all','new','reviewed','done']" [class.on]="suggFilter===f" (click)="suggFilter=f">{{ f | titlecase }}</button>
+          </div>
+          <div class="card" *ngIf="!shownSugg.length"><p class="muted center no-m">No suggestions here yet.</p></div>
+          <div class="card sg-item" *ngFor="let s of shownSugg">
+            <div class="row between wrap">
+              <div class="row">
+                <span class="cat-pill">{{ catIcon(s.category) }} {{ s.category | titlecase }}</span>
+                <strong>{{ s.title }}</strong>
+              </div>
+              <div class="row">
+                <select class="inp sm" [(ngModel)]="s.status" (ngModelChange)="setSuggStatus(s)">
+                  <option value="new">New</option><option value="reviewed">Reviewed</option><option value="done">Done</option>
+                </select>
+                <button class="mini danger" (click)="deleteSugg(s)">Delete</button>
+              </div>
+            </div>
+            <p class="sg-msg">{{ s.message }}</p>
+            <div class="tiny dim">{{ s.user_name }}<span *ngIf="s.user_email"> · {{ s.user_email }}</span> · {{ when(s.created_at) }}</div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ CHANGE PASSWORD ═══════════════ -->
+<div class="modal-back" *ngIf="showPw && user" (click)="showPw=false">
+  <div class="modal" (click)="$event.stopPropagation()">
+    <h3>Change password</h3>
+    <input class="inp" type="password" [(ngModel)]="pwCurrent" placeholder="Current password" autocomplete="current-password">
+    <input class="inp" type="password" [(ngModel)]="pwNew" placeholder="New password (6+ characters)" autocomplete="new-password">
+    <input class="inp" type="password" [(ngModel)]="pwConfirm" placeholder="Confirm new password" autocomplete="new-password" (keydown.enter)="changePassword()">
+    <div class="form-msg" [class.ok]="pwOk" [class.bad]="!pwOk" *ngIf="pwMsg">{{ pwMsg }}</div>
+    <div class="row end">
+      <button class="btn-ghost" (click)="showPw=false">Cancel</button>
+      <button class="btn-primary" (click)="changePassword()" [disabled]="pwBusy">{{ pwBusy ? 'Saving…' : 'Save' }}</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ TOAST ═══════════════ -->
+<div class="toast" *ngIf="toast.msg" [class.ok]="toast.ok" [class.bad]="!toast.ok">{{ toast.msg }}</div>

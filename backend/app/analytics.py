@@ -4,136 +4,87 @@ from .models import Transaction
 from .pdf_parser import UPIPDFParser
 
 _parser = UPIPDFParser()
+DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
 
 class AnalyticsEngine:
-
     def __init__(self, transactions: List[Transaction]):
         self.transactions = transactions
-        if transactions:
-            self.df = pd.DataFrame([t.model_dump() for t in transactions])
-            self._add_features()
-        else:
-            self.df = pd.DataFrame()
+        self.df = pd.DataFrame([t.model_dump() for t in transactions]) if transactions else pd.DataFrame()
+        if not self.df.empty:
+            self.df['date'] = pd.to_datetime(self.df['date'])
+            self.df['note'] = self.df['note'].fillna('').astype(str)
+            self.df['cashback'] = self.df['cashback'].fillna(0.0)
+            self.df['category'] = self.df.apply(
+                lambda r: r['category'] if isinstance(r['category'], str) and r['category']
+                else _parser._categorize_merchant(str(r['merchant'])), axis=1)
+            self.df['month'] = self.df['date'].dt.strftime('%Y-%m')
+            self.df['week'] = self.df['date'].dt.strftime('%G-W%V')
+            self.df['dow'] = self.df['date'].dt.day_name()
 
-    def _add_features(self):
-        self.df['month']   = self.df['date'].dt.to_period('M').astype(str)
-        self.df['week']    = self.df['date'].dt.to_period('W').astype(str)
-        self.df['dow']     = self.df['date'].dt.day_name()
-        mask = self.df['category'].isna()
-        if mask.any():
-            self.df.loc[mask,'category'] = self.df.loc[mask,'merchant'].apply(
-                lambda x: _parser._categorize_merchant(str(x))
-            )
+    @staticmethod
+    def _sum(df, col):
+        return {str(k): float(v) for k, v in df.groupby(col)['amount'].sum().items()} if not df.empty else {}
 
     def get_analytics(self) -> dict:
-        if not self.transactions:
+        if self.df.empty:
             return {}
+        df = self.df
+        failed_df = df[df['note'].str.upper() == 'FAILED']
+        ok = df[df['note'].str.upper() != 'FAILED']          # failed payments never moved money
+        sent = ok[ok['transaction_type'] == 'sent']
+        recv = ok[ok['transaction_type'] == 'received']
 
-        sent     = self.df[self.df['transaction_type'] == 'sent']
-        received = self.df[self.df['transaction_type'] == 'received']
+        total_spent = float(sent['amount'].sum())
+        total_received = float(recv['amount'].sum())
+        days_active = max((df['date'].max() - df['date'].min()).days, 1)
 
-        total_spent    = float(sent['amount'].sum())     if not sent.empty     else 0.0
-        total_received = float(received['amount'].sum()) if not received.empty else 0.0
+        monthly_spent = dict(sorted(self._sum(sent, 'month').items()))
+        monthly_recv = dict(sorted(self._sum(recv, 'month').items()))
+        months = sorted(set(monthly_spent) | set(monthly_recv))
 
-        # Sent breakdown
-        category_breakdown = {}
-        if not sent.empty:
-            category_breakdown = {k: float(v) for k,v in sent.groupby('category')['amount'].sum().items()}
+        merch = sent.groupby('merchant')['amount'].agg(['sum', 'count']).sort_values('sum', ascending=False)
+        top_merchants = [{'name': k, 'spent': float(r['sum']), 'count': int(r['count'])}
+                         for k, r in merch.head(8).iterrows()]
+        rsrc = recv.groupby('merchant')['amount'].agg(['sum', 'count']).sort_values('sum', ascending=False)
+        top_received = [{'name': k, 'received': float(r['sum']), 'count': int(r['count'])}
+                        for k, r in rsrc.head(5).iterrows()]
 
-        monthly_trend = {}
-        if not sent.empty:
-            monthly_trend = {str(k): float(v) for k,v in sorted(sent.groupby('month')['amount'].sum().items())}
+        rec = sent.groupby('merchant')['amount'].agg(['count', 'sum', 'mean'])
+        recurring = [{'merchant': k, 'count': int(r['count']), 'total': float(r['sum']), 'avg': float(r['mean'])}
+                     for k, r in rec[rec['count'] >= 3].sort_values('count', ascending=False).iterrows()]
 
-        # Received monthly breakdown
-        monthly_received = {}
-        if not received.empty:
-            monthly_received = {str(k): float(v) for k,v in sorted(received.groupby('month')['amount'].sum().items())}
+        largest = [{'merchant': r['merchant'], 'amount': float(r['amount']),
+                    'date': str(r['date'].date()), 'category': r['category']}
+                   for _, r in sent.nlargest(5, 'amount').iterrows()]
 
-        # Combined monthly (sent + received per month)
-        all_months = sorted(set(list(monthly_trend.keys()) + list(monthly_received.keys())))
-        monthly_combined = [
-            {
-                "month": m,
-                "spent":    monthly_trend.get(m, 0),
-                "received": monthly_received.get(m, 0),
-            }
-            for m in all_months
-        ]
+        failed = [{'merchant': r['merchant'], 'amount': float(r['amount']), 'date': str(r['date'].date())}
+                  for _, r in failed_df.head(5).iterrows()]
 
-        top_merchants = []
-        if not sent.empty:
-            top_merchants = [
-                {'name': k, 'spent': float(v), 'count': int(sent[sent['merchant']==k].shape[0])}
-                for k,v in sent.groupby('merchant')['amount'].sum().nlargest(8).items()
-            ]
-
-        # Top received sources
-        top_received_sources = []
-        if not received.empty:
-            top_received_sources = [
-                {'name': k, 'received': float(v), 'count': int(received[received['merchant']==k].shape[0])}
-                for k,v in received.groupby('merchant')['amount'].sum().nlargest(5).items()
-            ]
-
-        # Received category breakdown
-        received_category = {}
-        if not received.empty:
-            received_category = {k: float(v) for k,v in received.groupby('category')['amount'].sum().items()}
-
-        dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-        dow_spending = {}
-        if not sent.empty:
-            dow_spending = {d: float(sent[sent['dow']==d]['amount'].sum()) for d in dow_order}
-
-        weekly_trend = {}
-        if not sent.empty:
-            weekly_trend = {str(k): float(v) for k,v in sorted(sent.groupby('week')['amount'].sum().items())}
-
-        # Largest transactions
-        largest = []
-        if not sent.empty:
-            for _, row in sent.nlargest(5,'amount').iterrows():
-                largest.append({'merchant': row['merchant'], 'amount': float(row['amount']),
-                                'date': str(row['date'].date()), 'category': row['category']})
-
-        # Recurring
-        recurring = []
-        if not sent.empty:
-            counts = sent.groupby('merchant').agg(count=('amount','count'),total=('amount','sum'),avg=('amount','mean'))
-            for k,v in counts[counts['count']>=3].sort_values('count',ascending=False).iterrows():
-                recurring.append({'merchant':k,'count':int(v['count']),'total':float(v['total']),'avg':float(v['avg'])})
-
-        # Failed
-        failed_list = []
-        failed_df = self.df[self.df['note'].str.upper()=='FAILED'] if 'note' in self.df.columns else pd.DataFrame()
-        if not failed_df.empty:
-            for _,row in failed_df.head(5).iterrows():
-                failed_list.append({'merchant':row['merchant'],'amount':float(row['amount']),'date':str(row['date'].date())})
-
-        days_active = max((self.df['date'].max()-self.df['date'].min()).days, 1)
-
+        dow_sp = self._sum(sent, 'dow')
         return {
-            'total_spent':          total_spent,
-            'total_received':       total_received,
-            'net_flow':             total_received - total_spent,
-            'total_cashback':       float(self.df['cashback'].sum()),
-            'transaction_count':    len(sent),
-            'received_count':       len(received),
-            'total_transactions':   len(self.df),
-            'failed_count':         len(failed_df),
-            'average_transaction':  float(sent['amount'].mean()) if not sent.empty else 0.0,
-            'avg_per_day':          round(total_spent / days_active, 2),
-            'days_active':          days_active,
-            'category_breakdown':   category_breakdown,
-            'received_category':    received_category,
-            'monthly_trend':        monthly_trend,
-            'monthly_received':     monthly_received,
-            'monthly_combined':     monthly_combined,
-            'weekly_trend':         weekly_trend,
-            'dow_spending':         dow_spending,
-            'top_merchants':        top_merchants,
-            'top_received_sources': top_received_sources,
+            'total_spent': total_spent,
+            'total_received': total_received,
+            'net_flow': total_received - total_spent,
+            'total_cashback': float(df['cashback'].sum()),
+            'transaction_count': int(len(sent)),
+            'received_count': int(len(recv)),
+            'total_transactions': int(len(df)),
+            'failed_count': int(len(failed_df)),
+            'average_transaction': float(sent['amount'].mean()) if not sent.empty else 0.0,
+            'avg_per_day': round(total_spent / days_active, 2),
+            'days_active': days_active,
+            'category_breakdown': self._sum(sent, 'category'),
+            'received_category': self._sum(recv, 'category'),
+            'monthly_trend': monthly_spent,
+            'monthly_received': monthly_recv,
+            'monthly_combined': [{'month': m, 'spent': monthly_spent.get(m, 0.0),
+                                  'received': monthly_recv.get(m, 0.0)} for m in months],
+            'weekly_trend': dict(sorted(self._sum(sent, 'week').items())),
+            'dow_spending': {d: dow_sp.get(d, 0.0) for d in DOW},
+            'top_merchants': top_merchants,
+            'top_received_sources': top_received,
             'largest_transactions': largest,
-            'recurring_merchants':  recurring,
-            'failed_transactions':  failed_list,
+            'recurring_merchants': recurring,
+            'failed_transactions': failed,
         }

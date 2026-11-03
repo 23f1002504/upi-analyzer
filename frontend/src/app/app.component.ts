@@ -1,1526 +1,566 @@
-import { Component, OnInit, ViewChild, ElementRef, HostListener, ViewEncapsulation } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { NgxChartsModule, LegendPosition } from '@swimlane/ngx-charts';
+import { NgxChartsModule } from '@swimlane/ngx-charts';
+import { Observable, throwError } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 
-interface Message { role:'user'|'assistant'; text:string; sources?:string[]; loading?:boolean; }
-interface User { id:number; email:string; name:string; is_admin?:boolean; }
+/** Change this one line if your backend URL changes. */
+const API = location.hostname === 'localhost'
+  ? 'http://localhost:8000/api'
+  : 'https://upi-analyzer.onrender.com/api';
+
+const PALETTE = ['#60a5fa', '#f97316', '#4ade80', '#a78bfa', '#fbbf24', '#f87171',
+                 '#22d3ee', '#f472b6', '#34d399', '#fb923c', '#c084fc', '#2dd4bf'];
+const FIXED_COLORS: Record<string, string> = {
+  'Travel': PALETTE[0], 'Food & Grocery': PALETTE[1], 'Healthcare': PALETTE[2], 'Shopping': PALETTE[3],
+  'Transport': PALETTE[4], 'Credit Card': PALETTE[5], 'Utilities': PALETTE[6], 'Entertainment': PALETTE[7],
+  'Education': PALETTE[8], 'Transfer': '#94a3b8', 'Other': '#64748b',
+};
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const TAB_NAMES: Record<string, string> = {
+  overview: 'Overview', analytics: 'Analytics', transactions: 'Transactions',
+  ai: 'AI Chat', about: 'About', admin: 'Admin',
+};
+
+interface Msg { role: 'user' | 'assistant'; text: string; loading?: boolean; meta?: string; error?: boolean; }
+interface User { id: number; email: string; name: string; is_admin: boolean; }
+interface AboutBlock { title?: string; items?: string[]; ordered?: boolean; text?: string; }
 
 @Component({
   selector: 'app-root',
   standalone: true,
   encapsulation: ViewEncapsulation.None,
   imports: [CommonModule, FormsModule, NgxChartsModule],
-  template: `
-
-<!-- AUTH SCREEN -->
-<div class="auth-screen" *ngIf="!currentUser">
-  <div class="auth-box">
-    <div class="auth-logo">₹</div>
-    <div class="auth-title">UPI Analyzer</div>
-    <div class="auth-sub">Track your spending across months</div>
-
-    <div class="auth-tabs">
-      <button [class.on]="authMode==='login'"    (click)="authMode='login'">Sign in</button>
-      <button [class.on]="authMode==='register'" (click)="authMode='register'">Create account</button>
-    </div>
-
-    <div class="auth-form">
-      <input *ngIf="authMode==='register'" class="auth-in" [(ngModel)]="authName" placeholder="Full name">
-      <input class="auth-in" [(ngModel)]="authEmail" placeholder="Email" type="email">
-      <input class="auth-in" [(ngModel)]="authPassword" placeholder="Password" type="password" (keydown.enter)="submitAuth()">
-      <div class="auth-err" *ngIf="authError">{{ authError }}</div>
-      <button class="auth-btn" (click)="submitAuth()" [disabled]="authLoading">
-        {{ authLoading ? 'Please wait…' : (authMode==='login' ? 'Sign in' : 'Create account') }}
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- APP -->
-<div class="shell" *ngIf="currentUser">
-
-  <aside class="sidebar" [class.open]="sidebarOpen">
-    <div class="sb-brand">
-      <div class="sb-logo">₹</div>
-      <div>
-        <div class="sb-name">UPI Analyzer</div>
-        <div class="sb-user">{{ currentUser.name }}</div>
-      </div>
-    </div>
-
-    <nav class="sb-nav">
-      <button class="sb-lnk" [class.on]="tab==='overview'"     (click)="go('overview')">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        Overview
-      </button>
-      <button class="sb-lnk" [class.on]="tab==='analytics'"    (click)="go('analytics')" [disabled]="!analytics">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        Analytics
-      </button>
-      <button class="sb-lnk" [class.on]="tab==='transactions'" (click)="go('transactions')" [disabled]="!totalStored">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        Transactions
-        <span class="sb-pill" *ngIf="totalStored">{{ totalStored }}</span>
-      </button>
-      <button class="sb-lnk" [class.on]="tab==='ai'"           (click)="go('ai')">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-        AI Chat
-        <span class="sb-online" *ngIf="ollamaOk"></span>
-      </button>
-      <button class="sb-lnk admin-lnk" [class.on]="tab==='admin'" (click)="go('admin'); loadAdminData()" *ngIf="isAdmin">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Admin
-        <span class="sb-badge-red" *ngIf="adminStats?.online_now">{{ adminStats?.online_now }}</span>
-      </button>
-      <button class="sb-lnk" [class.on]="tab==='about'" (click)="go('about')">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        About
-      </button>
-    </nav>
-
-    <div class="sb-gap"></div>
-
-    <div class="sb-filter" *ngIf="totalStored">
-      <div class="sb-filter-lbl">Date range</div>
-      <div class="sb-dates">
-        <input type="date" class="din" [(ngModel)]="filterFrom" (change)="onDateFilter()">
-        <span class="din-sep">→</span>
-        <input type="date" class="din" [(ngModel)]="filterTo"   (change)="onDateFilter()">
-      </div>
-      <div class="date-actions">
-        <button class="sb-reset" (click)="clearAllDates()">All time</button>
-        <button class="sb-reset" (click)="setThisMonth()">This month</button>
-      </div>
-      <div class="sb-range-info" *ngIf="filterFrom||filterTo">{{ analytics?.transaction_count||0 }} of {{ totalStored }} transactions</div>
-    </div>
-
-    <div class="sb-foot">
-      <label class="sb-import-btn">
-        <input type="file" accept=".csv,.xlsx,.pdf" (change)="onFile($event, autoType($event))">
-        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        {{ uploading ? 'Importing…' : 'Import CSV / PDF' }}
-      </label>
-      <button class="sb-clear-btn" *ngIf="totalStored" (click)="confirmClear()">Clear all data</button>
-      <button class="sb-logout secondary" (click)="showChangePw=!showChangePw">Change password</button>
-      <div class="pw-form" *ngIf="showChangePw">
-        <input class="pw-in" type="password" [(ngModel)]="pwCurrent" placeholder="Current password">
-        <input class="pw-in" type="password" [(ngModel)]="pwNew"     placeholder="New password">
-        <input class="pw-in" type="password" [(ngModel)]="pwConfirm" placeholder="Confirm new">
-        <div class="pw-msg" [class.ok]="pwOk" [class.err]="!pwOk" *ngIf="pwMsg">{{ pwMsg }}</div>
-        <button class="pw-save" (click)="changePassword()">Save</button>
-      </div>
-      <button class="sb-logout" (click)="logout()">Sign out</button>
-    </div>
-  </aside>
-
-  <div class="overlay" *ngIf="sidebarOpen" (click)="sidebarOpen=false"></div>
-
-  <div class="main">
-    <header class="bar">
-      <button class="burger" (click)="sidebarOpen=!sidebarOpen">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      </button>
-      <div class="bar-title">{{ tabLabel() }}</div>
-      <div class="bar-right">
-        <span class="trademark">Made by AM</span>
-        <div class="toast" [class.tok]="toast.ok" [class.terr]="!toast.ok" *ngIf="toast.msg">{{ toast.msg }}</div>
-      </div>
-    </header>
-
-    <!-- OVERVIEW -->
-    <main class="page" *ngIf="tab==='overview'">
-      <div class="empty" *ngIf="!totalStored">
-        <div class="empty-box">
-          <div class="empty-ico"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
-          <h2>Import your first statement</h2>
-          <p>Upload SuperMoney CSV exports. Multiple uploads are merged — get combined analytics across months.</p>
-          <div class="empty-acts">
-            <label class="btn-w"><input type="file" accept=".csv,.xlsx" (change)="onFile($event,'csv')">Import CSV</label>
-            <button class="btn-o" (click)="downloadSample()">Sample CSV</button>
-          </div>
-        </div>
-      </div>
-
-      <div *ngIf="totalStored && analytics" class="dash">
-        <div class="kpis">
-          <div class="kpi"><div class="kn">₹{{ analytics.total_spent | number:'1.0-0' }}</div><div class="kl">Total spent</div><div class="ks">₹{{ analytics.avg_per_day | number:'1.0-0' }}/day</div></div>
-          <div class="kpi"><div class="kn g">₹{{ analytics.total_received | number:'1.0-0' }}</div><div class="kl">Received</div></div>
-          <div class="kpi"><div class="kn" [class.g]="analytics.net_flow>=0" [class.r]="analytics.net_flow<0">{{ analytics.net_flow>=0?'+':'' }}₹{{ analytics.net_flow | number:'1.0-0' }}</div><div class="kl">Net flow</div></div>
-          <div class="kpi"><div class="kn">{{ analytics.transaction_count }}</div><div class="kl">Payments</div><div class="ks">₹{{ analytics.average_transaction | number:'1.0-0' }} avg</div></div>
-          <div class="kpi"><div class="kn">{{ analytics.days_active }}</div><div class="kl">Days tracked</div></div>
-        </div>
-
-        <div class="grid">
-          <!-- Pie -->
-          <div class="card" *ngIf="pieData.length">
-            <div class="ch">Spending by category</div>
-            <div class="pie-wrap">
-              <ngx-charts-pie-chart [results]="pieData" [legend]="false" [labels]="false"
-                [doughnut]="true" [arcWidth]="0.38" [tooltipDisabled]="false"
-                [view]="[220,220]" [scheme]="scheme">
-              </ngx-charts-pie-chart>
-              <div class="pie-legend">
-                <div class="pl-row" *ngFor="let c of pieData">
-                  <span class="pl-dot" [style.background]="c.color||''"></span>
-                  <span class="pl-name">{{ c.name }}</span>
-                  <span class="pl-val">{{ pct(c.value, analytics.total_spent) | number:'1.0-0' }}%</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Monthly bar -->
-          <div class="card" *ngIf="monthlyData.length">
-            <div class="ch">Monthly spending</div>
-            <ngx-charts-bar-vertical [results]="monthlyData" [xAxis]="true" [yAxis]="true"
-              [showDataLabel]="true" [tooltipDisabled]="false"
-              [view]="[cardW, 240]" [scheme]="scheme">
-            </ngx-charts-bar-vertical>
-          </div>
-
-          <!-- Top merchants -->
-          <div class="card wide" *ngIf="merchantData.length">
-            <div class="ch">Top merchants</div>
-            <ngx-charts-bar-horizontal [results]="merchantData" [xAxis]="true" [yAxis]="true"
-              [showDataLabel]="true" [tooltipDisabled]="false"
-              [view]="[wideW, 280]" [scheme]="scheme">
-            </ngx-charts-bar-horizontal>
-          </div>
-
-          <!-- Largest payments -->
-          <div class="card" *ngIf="analytics.largest_transactions?.length">
-            <div class="ch">Largest payments</div>
-            <div class="rows">
-              <div class="row-item" *ngFor="let t of analytics.largest_transactions">
-                <div class="ri-l"><div class="ri-name">{{ t.merchant }}</div><div class="ri-sub">{{ t.date }} · {{ t.category }}</div></div>
-                <div class="ri-val r">₹{{ t.amount | number:'1.0-0' }}</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Recurring -->
-          <div class="card" *ngIf="analytics.recurring_merchants?.length">
-            <div class="ch">Recurring <span class="tag">3+ times</span></div>
-            <div class="rows">
-              <div class="row-item" *ngFor="let r of analytics.recurring_merchants.slice(0,6)">
-                <div class="ri-l"><div class="ri-name">{{ r.merchant }}</div><div class="ri-sub">{{ r.count }}× · ₹{{ r.avg | number:'1.0-0' }} avg</div></div>
-                <div class="ri-val">₹{{ r.total | number:'1.0-0' }}</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Weekday -->
-          <div class="card" *ngIf="dowData.length">
-            <div class="ch">Spending by weekday</div>
-            <ngx-charts-bar-vertical [results]="dowData" [xAxis]="true" [yAxis]="false"
-              [showDataLabel]="true" [tooltipDisabled]="false"
-              [view]="[cardW, 200]" [scheme]="scheme">
-            </ngx-charts-bar-vertical>
-          </div>
-
-          <!-- Failed -->
-          <div class="card" *ngIf="analytics.failed_transactions?.length">
-            <div class="ch">Failed <span class="tag warn">{{ analytics.failed_count }}</span></div>
-            <div class="rows">
-              <div class="row-item" *ngFor="let f of analytics.failed_transactions">
-                <div class="ri-l"><div class="ri-name">{{ f.merchant }}</div><div class="ri-sub">{{ f.date }}</div></div>
-                <div class="ri-val dim">₹{{ f.amount | number:'1.0-0' }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </main>
-
-    <!-- ANALYTICS -->
-    <main class="page" *ngIf="tab==='analytics' && analytics">
-
-      <!-- Received summary strip -->
-      <div class="recv-strip" *ngIf="analytics.total_received > 0">
-        <div class="recv-kpi">
-          <div class="recv-val">₹{{ analytics.total_received | number:'1.0-0' }}</div>
-          <div class="recv-lbl">Total received</div>
-        </div>
-        <div class="recv-kpi">
-          <div class="recv-val">{{ analytics.received_count || 0 }}</div>
-          <div class="recv-lbl">Incoming transactions</div>
-        </div>
-        <div class="recv-kpi">
-          <div class="recv-val" [class.g]="analytics.net_flow>=0" [class.r]="analytics.net_flow<0">
-            {{ analytics.net_flow>=0?'+':'' }}₹{{ analytics.net_flow | number:'1.0-0' }}
-          </div>
-          <div class="recv-lbl">Net flow</div>
-        </div>
-        <div class="recv-kpi">
-          <div class="recv-val">₹{{ analytics.average_transaction | number:'1.0-0' }}</div>
-          <div class="recv-lbl">Avg payment</div>
-        </div>
-      </div>
-
-      <div class="grid">
-
-        <!-- Monthly compared: Spent vs Received -->
-        <div class="card wide" *ngIf="monthlyComparedData.length && monthlyComparedData[0]?.series?.length">
-          <div class="ch">Monthly — Spent vs Received</div>
-          <ngx-charts-bar-vertical-2d [results]="monthlyComparedData"
-            [xAxis]="true" [yAxis]="true" [showDataLabel]="true"
-            [groupPadding]="4" [view]="[wideW, 240]" [scheme]="schemeCompare">
-          </ngx-charts-bar-vertical-2d>
-        </div>
-
-        <!-- Spending category breakdown -->
-        <div class="card" *ngIf="pieData.length">
-          <div class="ch">Spending by category</div>
-          <div class="cat-list">
-            <div class="cat-row" *ngFor="let c of pieData">
-              <span class="cat-dot" [style.background]="c.color"></span>
-              <span class="cat-name">{{ c.name }}</span>
-              <div class="cat-bar-wrap"><div class="cat-bar" [style.width.%]="pct(c.value,analytics.total_spent)" [style.background]="c.color"></div></div>
-              <span class="cat-pct">{{ pct(c.value,analytics.total_spent) | number:'1.0-0' }}%</span>
-              <span class="cat-amt">₹{{ c.value | number:'1.0-0' }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Received sources -->
-        <div class="card" *ngIf="receivedSourceData.length">
-          <div class="ch">Income sources</div>
-          <ngx-charts-bar-horizontal [results]="receivedSourceData"
-            [xAxis]="true" [yAxis]="true" [showDataLabel]="true"
-            [view]="[cardW, 220]" [scheme]="schemeGreen">
-          </ngx-charts-bar-horizontal>
-        </div>
-
-        <!-- Weekly trend -->
-        <div class="card wide" *ngIf="weeklyData.length && weeklyData[0]?.series?.length > 1">
-          <div class="ch">Weekly spending trend</div>
-          <ngx-charts-line-chart [results]="weeklyData" [xAxis]="true" [yAxis]="true"
-            [showGridLines]="true" [tooltipDisabled]="false"
-            [view]="[wideW, 200]" [scheme]="scheme">
-          </ngx-charts-line-chart>
-        </div>
-
-        <!-- Day of week -->
-        <div class="card" *ngIf="dowData.length">
-          <div class="ch">Spending by weekday</div>
-          <ngx-charts-bar-vertical [results]="dowData" [xAxis]="true" [yAxis]="true"
-            [showDataLabel]="true" [view]="[cardW, 220]" [scheme]="scheme">
-          </ngx-charts-bar-vertical>
-        </div>
-
-        <!-- Top merchants -->
-        <div class="card" *ngIf="merchantData.length">
-          <div class="ch">Top spending merchants</div>
-          <ngx-charts-bar-horizontal [results]="merchantData" [xAxis]="true" [yAxis]="true"
-            [showDataLabel]="true" [view]="[cardW, 260]" [scheme]="scheme">
-          </ngx-charts-bar-horizontal>
-        </div>
-
-      </div>
-    </main>
-
-    <!-- TRANSACTIONS -->
-    <main class="page" *ngIf="tab==='transactions'">
-      <div class="txn-bar">
-        <span class="txn-ct">{{ filteredTxns.length }} transactions</span>
-        <div class="txn-tools">
-          <select class="ctl" [(ngModel)]="fType" (change)="applyFilter()">
-            <option value="">All types</option><option value="sent">Sent</option><option value="received">Received</option>
-          </select>
-          <select class="ctl" [(ngModel)]="fCat" (change)="applyFilter()">
-            <option value="">All categories</option>
-            <option *ngFor="let c of allCats" [value]="c">{{ c }}</option>
-          </select>
-          <input class="ctl ctl-search" [(ngModel)]="fSearch" (input)="applyFilter()" placeholder="Search…">
-        </div>
-      </div>
-      <div class="tbl-box">
-        <table class="tbl">
-          <thead><tr>
-            <th>Merchant</th><th>Amount</th><th>Type</th><th>Date</th>
-            <th>Category</th><th>Status</th><th title="Include in analytics">⬤</th>
-          </tr></thead>
-          <tbody>
-            <tr *ngFor="let t of filteredTxns.slice(0,showN)" [class.excluded-row]="!t.included">
-              <td class="td-m" [class.dim]="!t.included">{{ t.merchant }}</td>
-              <td class="td-a" [class.r]="t.transaction_type==='sent'" [class.g]="t.transaction_type==='received'" [class.dim]="!t.included">
-                {{ t.transaction_type==='sent'?'-':'+' }}₹{{ t.amount | number:'1.0-0' }}
-              </td>
-              <td><span class="pill" [class.ps]="t.transaction_type==='sent'" [class.pr]="t.transaction_type==='received'">{{ t.transaction_type }}</span></td>
-              <td class="td-d" [class.dim]="!t.included">{{ t.date | date:'d MMM yy' }}</td>
-              <td class="td-cat">
-                <div *ngIf="editingCat !== t.id" class="cat-cell" (click)="startEditCat(t)">
-                  <span class="cat-lbl" [class.custom-cat]="t.custom_category">{{ t.category }}</span>
-                  <span class="cat-edit-ico">✎</span>
-                </div>
-                <div *ngIf="editingCat === t.id" class="cat-edit-wrap">
-                  <select class="cat-sel" [(ngModel)]="editingCatVal" (change)="onCatChange(t)">
-                    <option *ngFor="let c of allSystemCats" [value]="c">{{ c }}</option>
-                    <option value="__custom__">+ Custom…</option>
-                  </select>
-                  <input *ngIf="editingCatVal==='__custom__'" class="cat-custom-in"
-                    [(ngModel)]="customCatInput" placeholder="Custom category"
-                    (keydown.enter)="saveCat(t)" (keydown.escape)="editingCat=null">
-                  <button class="cat-save" (click)="saveCat(t)">✓</button>
-                  <button class="cat-cancel" (click)="editingCat=null">✕</button>
-                </div>
-              </td>
-              <td class="td-st" [class.g]="t.note==='SUCCESS'" [class.r]="t.note==='FAILED'" [class.dim]="!t.included">{{ t.note }}</td>
-              <td class="td-toggle">
-                <button class="toggle-btn" [class.on]="t.included" [class.off]="!t.included"
-                  (click)="toggleIncluded(t)" [title]="t.included ? 'Included — click to exclude' : 'Excluded — click to include'">
-                  {{ t.included ? '●' : '○' }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="load-more" *ngIf="filteredTxns.length>showN" (click)="showN=showN+100">
-          Load {{ [filteredTxns.length-showN,100].sort()[0] }} more · {{ filteredTxns.length-showN }} remaining
-        </div>
-      </div>
-    </main>
-
-    <!-- AI -->
-    <div class="ai-wrap" *ngIf="tab==='ai'">
-      <!-- Compact top bar for AI settings -->
-      <div class="ai-topbar">
-        <div class="ai-status-row">
-          <div class="ait-status" [class.on]="ollamaOk" [class.off]="!ollamaOk">
-            <span class="ait-dot"></span>
-            {{ ollamaOk ? (status?.provider==='groq' ? '⚡ Groq — ' + (status?.active_model||'') : '● ' + (status?.active_model||'Online')) : '○ Offline' }}
-          </div>
-          <div class="ait-idx" *ngIf="indexedCount">{{ indexedCount }} docs</div>
-          <button class="ait-btn" (click)="reIndex()" [disabled]="indexing||!totalStored">
-            {{ indexing ? 'Indexing…' : 'Re-index' }}
-          </button>
-        </div>
-        <div class="ai-suggestions">
-          <button class="ait-sugg" *ngFor="let q of suggestions" (click)="ask(q)">{{ q }}</button>
-        </div>
-      </div>
-
-      <!-- Chat area -->
-      <div class="ai-chat">
-        <div class="chat-msgs" #chatWin>
-          <div class="chat-empty" *ngIf="!messages.length">
-            <div class="ce-t">AI Transaction Analyst</div>
-            <div class="ce-s">Import transactions then ask anything about your spending.</div>
-            <div class="ce-s" *ngIf="!ollamaOk" style="color:#f87171;margin-top:8px">
-              AI unavailable — check GROQ_API_KEY in Railway environment variables
-            </div>
-          </div>
-          <div *ngFor="let m of messages" class="msg-row" [class.user]="m.role==='user'">
-            <div class="bub" [class.bu]="m.role==='user'" [class.bb]="m.role==='assistant'">
-              <span *ngIf="m.loading" class="ld"><i></i><i></i><i></i></span>
-              <span *ngIf="!m.loading" style="white-space:pre-wrap">{{ m.text }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="chat-bar">
-          <input class="chat-in" [(ngModel)]="question" (keydown.enter)="send()"
-                 [disabled]="chatLoading" placeholder="Ask about your spending…">
-          <button class="chat-send" (click)="send()" [disabled]="chatLoading||!question.trim()">
-            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    
-    <!-- ABOUT TAB -->
-    <main class="page" *ngIf="tab==='about'">
-      <div class="about-wrap">
-
-        <div class="about-content" *ngIf="!editingAbout">
-          <div class="about-hero">
-            <div class="about-logo">₹</div>
-            <h1 class="about-title">{{ aboutContent?.about_title || 'UPI Transaction Analyzer' }}</h1>
-            <p class="about-sub">{{ aboutContent?.about_subtitle || 'Your personal finance dashboard' }}</p>
-          </div>
-
-          <div class="about-body">
-            <p *ngFor="let line of (aboutContent?.about_body || '').split('\n')"
-               [class.bullet]="line.startsWith('•')">
-              {{ line }}
-            </p>
-          </div>
-
-          <div class="about-version">{{ aboutContent?.about_version }}</div>
-
-          <div class="about-actions">
-            <button class="about-sugg-btn" (click)="showSuggestionForm=!showSuggestionForm">
-              💡 {{ showSuggestionForm ? 'Close' : 'Send a suggestion' }}
-            </button>
-            <button class="about-edit-btn" *ngIf="isAdmin" (click)="startEditAbout()">
-              ✎ Edit content
-            </button>
-          </div>
-
-          <div class="sugg-form" *ngIf="showSuggestionForm">
-            <div class="sugg-heading">Got an idea? We'd love to hear it.</div>
-            <div *ngIf="suggSent" class="sugg-sent">✓ Thanks! Your suggestion has been sent.</div>
-            <div *ngIf="!suggSent">
-              <input class="sugg-in" [(ngModel)]="suggTitle" placeholder="Short title" maxlength="120">
-              <textarea class="sugg-ta" [(ngModel)]="suggMsg" placeholder="Describe your idea…" rows="4" maxlength="1000"></textarea>
-              <div class="sugg-err" *ngIf="suggErr">{{ suggErr }}</div>
-              <button class="sugg-submit" (click)="submitSuggestion()">Submit suggestion</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="about-edit-panel" *ngIf="editingAbout && isAdmin">
-          <div class="edit-head">
-            <div class="edit-title">Edit About Page</div>
-            <div class="edit-actions">
-              <button class="edit-save" (click)="saveAbout()">Save</button>
-              <button class="edit-cancel" (click)="editingAbout=false">Cancel</button>
-            </div>
-          </div>
-          <div class="edit-field"><label>Title</label><input class="edit-in" [(ngModel)]="aboutEdit.about_title"></div>
-          <div class="edit-field"><label>Subtitle</label><input class="edit-in" [(ngModel)]="aboutEdit.about_subtitle"></div>
-          <div class="edit-field"><label>Body</label><textarea class="edit-ta" [(ngModel)]="aboutEdit.about_body" rows="12"></textarea></div>
-          <div class="edit-field"><label>Version</label><input class="edit-in" [(ngModel)]="aboutEdit.about_version"></div>
-        </div>
-
-      </div>
-    </main>
-
-    <!-- ADMIN TAB -->
-    <main class="page" *ngIf="tab==='admin' && isAdmin">
-
-      <div class="adm-header">
-        <div>
-          <div class="adm-title">⚙ Admin Dashboard</div>
-          <div class="adm-sub">Platform overview · auto-refreshes every 30s</div>
-        </div>
-        <button class="adm-refresh" (click)="loadAdminData()" [disabled]="adminLoading">
-          {{ adminLoading ? '…' : '↻ Refresh' }}
-        </button>
-      </div>
-
-      <!-- KPI Cards -->
-      <div class="adm-kpis" *ngIf="adminStats">
-        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.total_users }}</div><div class="adm-kpi-l">Total Users</div></div>
-        <div class="adm-kpi adm-kpi-green"><div class="adm-kpi-n">{{ adminStats.online_now }}</div><div class="adm-kpi-l">● Online Now</div></div>
-        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.new_today }}</div><div class="adm-kpi-l">New Today</div></div>
-        <div class="adm-kpi"><div class="adm-kpi-n">{{ adminStats.total_txns | number }}</div><div class="adm-kpi-l">Total Transactions</div></div>
-      </div>
-
-      <div class="adm-empty-state" *ngIf="!adminStats && !adminLoading">
-        <button class="adm-load-btn" (click)="loadAdminData()">Load Admin Data</button>
-      </div>
-
-      <!-- Users Table -->
-      <div class="adm-card">
-        <div class="adm-card-head">
-          Users
-          <span class="adm-badge-green" *ngIf="adminStats?.online_now">{{ adminStats.online_now }} online</span>
-          <span class="adm-badge-grey">{{ adminUsers.length }} total</span>
-        </div>
-        <div class="adm-empty" *ngIf="!adminUsers.length && !adminLoading">No users — click Refresh</div>
-        <div class="adm-tbl-wrap" *ngIf="adminUsers.length">
-          <table class="adm-tbl">
-            <thead><tr>
-              <th>Status</th><th>Name</th><th>Email</th><th>Transactions</th>
-              <th>Latest data</th><th>Last active</th><th>Role</th><th></th>
-            </tr></thead>
-            <tbody>
-              <tr *ngFor="let u of adminUsers" [class.adm-row-online]="u.online">
-                <td class="adm-status-cell">
-                  <span [class.adm-dot-on]="u.online" [class.adm-dot-off]="!u.online">{{ u.online ? '●' : '○' }}</span>
-                </td>
-                <td class="adm-name">{{ u.name }}</td>
-                <td class="adm-email">{{ u.email }}</td>
-                <td class="adm-num">{{ u.txn_count }}</td>
-                <td class="adm-dim">{{ u.latest_txn_date ? (u.latest_txn_date | date:'d MMM yy') : '—' }}</td>
-                <td class="adm-dim">{{ u.last_seen ? (u.last_seen | date:'d MMM, h:mm a') : 'Never' }}</td>
-                <td><span class="adm-role" [class.adm-role-admin]="u.is_admin">{{ u.is_admin ? 'Admin' : 'User' }}</span></td>
-                <td><button class="adm-del" *ngIf="!u.is_admin" (click)="deleteUser(u)" title="Delete">✕</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Suggestions -->
-      <div class="adm-card" style="margin-top:14px">
-        <div class="adm-card-head">
-          User Suggestions
-          <span class="adm-badge-green" *ngIf="adminSuggestions.length">{{ adminSuggestions.length }}</span>
-          <button class="adm-sugg-btn" (click)="loadAdminSuggestions(); showAdminSugg=!showAdminSugg">
-            {{ showAdminSugg ? 'Hide' : 'View Suggestions' }}
-          </button>
-        </div>
-        <div *ngIf="showAdminSugg">
-          <div class="adm-empty" *ngIf="!adminSuggestions.length">No suggestions yet.</div>
-          <table class="adm-tbl" *ngIf="adminSuggestions.length">
-            <thead><tr><th>From</th><th>Title</th><th>Message</th><th>Date</th><th>Status</th></tr></thead>
-            <tbody>
-              <tr *ngFor="let s of adminSuggestions">
-                <td class="adm-email">{{ s.user_name }}<br><small style="color:#444">{{ s.user_email }}</small></td>
-                <td class="adm-name">{{ s.title }}</td>
-                <td class="adm-dim" style="max-width:260px;white-space:pre-wrap;font-size:12px">{{ s.message }}</td>
-                <td class="adm-dim">{{ s.created_at | date:'d MMM' }}</td>
-                <td>
-                  <select class="adm-status-sel" [(ngModel)]="s.status" (change)="updateSuggStatus(s)">
-                    <option value="new">New</option>
-                    <option value="reviewed">Reviewed</option>
-                    <option value="done">Done ✓</option>
-                  </select>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-    </main>
-
-</div>
-</div>
- 
-  `,
-  styles: [`
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    :host{display:block}
-    input[type=file]{display:none}
-
-    /* ── TOKENS ── */
-    :root{
-      --bg: #0d0d0d;
-      --surface: #161616;
-      --border: #252525;
-      --border2: #333333;
-      --text: #e0e0e0;
-      --text2: #aaa;
-      --text3: #666;
-      --green: #4ade80;
-      --red: #f87171;
-      --blue: #60a5fa;
-      --accent: #f0f0f0;
-    }
-
-    /* ── AUTH ── */
-    .auth-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
-    .auth-box{width:360px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:36px 32px}
-    .auth-logo{width:44px;height:44px;background:#fff;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#0d0d0d;margin-bottom:16px}
-    .auth-title{font-size:20px;font-weight:700;color:#f0f0f0;letter-spacing:-.4px;margin-bottom:4px}
-    .auth-sub{font-size:13px;color:#666;margin-bottom:24px}
-    .auth-tabs{display:flex;gap:2px;background:#0d0d0d;border-radius:8px;padding:3px;margin-bottom:20px}
-    .auth-tabs button{flex:1;padding:7px;border:none;background:none;color:#aaa;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
-    .auth-tabs button.on{background:var(--surface);color:#f0f0f0;box-shadow:0 1px 4px rgba(0,0,0,.4)}
-    .auth-form{display:flex;flex-direction:column;gap:10px}
-    .auth-in{background:#0d0d0d;border:1px solid var(--border);color:#f0f0f0;border-radius:8px;padding:11px 14px;font-size:14px;outline:none;transition:border-color .15s}
-    .auth-in:focus{border-color:var(--border2)}
-    .auth-err{font-size:12px;color:var(--red);padding:4px 2px}
-    .auth-btn{background:#f0f0f0;color:#0d0d0d;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s;margin-top:4px}
-    .auth-btn:hover:not(:disabled){background:#ddd}
-    .auth-btn:disabled{opacity:.5;cursor:default}
-
-    /* ── APP SHELL ── */
-    .shell{display:flex;height:100vh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,'Inter','Segoe UI',sans-serif;font-size:13px}
-
-    /* ── SIDEBAR ── */
-    .sidebar{width:240px;min-width:240px;flex-shrink:0;background:#0a0a0a;border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;overflow-y:auto;transition:transform .2s;position:relative}
-    .sb-brand{display:flex;align-items:center;gap:10px;padding:18px 16px 14px;border-bottom:1px solid var(--border)}
-    .sb-logo{width:32px;height:32px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#0a0a0a;flex-shrink:0}
-    .sb-name{font-size:13px;font-weight:600;color:#f0f0f0;letter-spacing:-.2px}
-    .sb-user{font-size:11px;color:#666;margin-top:1px}
-    .sb-nav{padding:10px 8px;display:flex;flex-direction:column;gap:2px}
-    .sb-lnk{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;border:none;background:none;color:#666;cursor:pointer;font-size:13px;font-weight:500;text-align:left;width:100%;transition:all .15s;position:relative}
-    .sb-lnk:hover:not(:disabled){background:#1a1a1a;color:#e0e0e0}
-    .sb-lnk.on{background:#1e1e1e;color:#ffffff}
-    .sb-lnk:disabled{opacity:.2;cursor:default}
-    .sb-pill{margin-left:auto;font-size:10px;background:#1a1a1a;color:#666;padding:1px 7px;border-radius:10px}
-    .sb-online{width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:auto;animation:pg 2s infinite}
-    @keyframes pg{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.4)}50%{box-shadow:0 0 0 4px rgba(74,222,128,0)}}
-    .sb-gap{flex:1;min-height:8px}
-
-    .sb-filter{padding:12px 14px 8px;border-top:1px solid var(--border);flex-shrink:0}
-    .sb-filter-lbl{font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
-    .sb-dates{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-    .din{background:#111;border:1px solid var(--border);color:#aaa;border-radius:6px;padding:6px 7px;font-size:11px;width:100%;outline:none;color-scheme:dark}
-    .din:focus{border-color:var(--border2);color:#e0e0e0}
-    .din-sep{color:#666;font-size:11px;flex-shrink:0}
-    .date-actions{display:flex;gap:6px;margin-bottom:4px}
-    .sb-reset{background:#141414;border:1px solid var(--border);color:#aaa;font-size:11px;cursor:pointer;padding:4px 8px;border-radius:5px;transition:all .15s}
-    .sb-reset:hover{border-color:var(--border2);color:#e0e0e0}
-    .sb-reset:hover{color:#aaa}
-    .sb-range-info{font-size:11px;color:#666;margin-top:4px;margin-bottom:4px}
-
-    .sb-foot{padding:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0}
-    .sb-import-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#151515;border:1px solid var(--border);border-radius:8px;color:#aaa;cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
-    .sb-import-btn:hover{border-color:var(--border2);color:#e0e0e0;background:#181818}
-    .sb-clear-btn{background:none;border:1px solid var(--border);color:#666;border-radius:6px;padding:7px;font-size:11px;cursor:pointer;transition:all .15s}
-    .sb-clear-btn:hover{border-color:#3a1515;color:var(--red);background:#1a0a0a}
-    .sb-logout{background:none;border:none;color:#666;font-size:11px;cursor:pointer;padding:4px 0;text-align:left;transition:color .15s}
-    .sb-logout:hover{color:#aaa}
-
-    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:none}
-
-    /* ── MAIN ── */
-    .main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;height:100vh}
-    .bar{height:50px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0;background:#0a0a0a}
-    .burger{display:none;background:none;border:none;color:#666;cursor:pointer;padding:5px;border-radius:6px}
-    .burger:hover{background:#181818;color:var(--text)}
-    .bar-title{font-size:15px;font-weight:600;color:#ffffff;letter-spacing:-.2px}
-    .bar-right{margin-left:auto}
-    .toast{font-size:12px;padding:6px 12px;border-radius:7px}
-    .toast.tok{background:#0a1f11;color:var(--green);border:1px solid #1a3a22}
-    .toast.terr{background:#1f0a0a;color:var(--red);border:1px solid #3a1a1a}
-
-    .page{flex:1;overflow-y:auto;padding:24px}
-
-    /* ── EMPTY ── */
-    .empty{display:flex;align-items:center;justify-content:center;height:100%}
-    .empty-box{text-align:center;max-width:420px}
-    .empty-ico{width:60px;height:60px;background:#151515;border:1px solid var(--border);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;color:#2a2a2a}
-    .empty-box h2{font-size:22px;font-weight:600;color:#f0f0f0;margin-bottom:8px;letter-spacing:-.3px}
-    .empty-box p{color:#555;line-height:1.7;margin-bottom:24px}
-    .empty-acts{display:flex;gap:10px;justify-content:center}
-    .btn-w{padding:10px 22px;background:var(--accent);color:#0a0a0a;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
-    .btn-w:hover{background:#ddd}
-    .btn-o{padding:10px 22px;background:none;color:#aaa;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px}
-    .btn-o:hover{border-color:var(--border2);color:var(--text)}
-
-    /* ── KPIS ── */
-    .dash{display:flex;flex-direction:column;gap:20px}
-    .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-    .kpi{background:var(--bg);padding:18px 20px}
-    .kn{font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-.5px;font-variant-numeric:tabular-nums;line-height:1}
-    .kn.g{color:var(--green)} .kn.r{color:var(--red)}
-    .kl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.6px;margin-top:5px;font-weight:600}
-    .ks{font-size:11px;color:#666;margin-top:3px}
-
-    /* ── GRID ── */
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-    .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;overflow:hidden}
-    .card.wide{grid-column:1/-1}
-    .ch{font-size:11px;font-weight:600;color:#aaa;text-transform:uppercase;letter-spacing:.6px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
-    .tag{font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#1a1a1a;color:#666;text-transform:none;letter-spacing:0}
-    .tag.warn{background:#1f1208;color:#fb923c}
-
-    /* ── PIE + LEGEND ── */
-    .pie-wrap{display:flex;align-items:center;gap:20px}
-    .pie-legend{display:flex;flex-direction:column;gap:8px;flex:1}
-    .pl-row{display:flex;align-items:center;gap:8px}
-    .pl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .pl-name{font-size:12px;color:#aaa;flex:1}
-    .pl-val{font-size:12px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
-
-    /* ── ROWS ── */
-    .rows{display:flex;flex-direction:column;gap:12px}
-    .row-item{display:flex;align-items:center;gap:12px}
-    .ri-l{flex:1;min-width:0}
-    .ri-name{font-size:13px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .ri-sub{font-size:11px;color:#666;margin-top:2px}
-    .ri-val{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;color:#aaa}
-    .ri-val.r{color:var(--red)} .ri-val.g{color:var(--green)} .ri-val.dim{color:#666}
-
-    /* ── CAT LIST ── */
-    .cat-list{display:flex;flex-direction:column;gap:10px}
-    .cat-row{display:flex;align-items:center;gap:10px}
-    .cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .cat-name{font-size:12px;color:#aaa;width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
-    .cat-bar-wrap{flex:1;height:4px;background:#1a1a1a;border-radius:2px;overflow:hidden}
-    .cat-bar{height:100%;border-radius:2px;transition:width .4s}
-    .cat-pct{font-size:11px;color:#666;width:32px;text-align:right;flex-shrink:0}
-    .cat-amt{font-size:12px;color:#aaa;width:76px;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0}
-
-    /* ── CHART OVERRIDES (visibility) ── */
-    .ngx-charts text{fill:#888!important;font-size:11px!important;font-family:-apple-system,'Inter','Segoe UI',sans-serif!important}
-    .ngx-charts .gridline-path,.ngx-charts .refline-path{stroke:#1e1e1e!important}
-    .ngx-charts .tick line{stroke:#1e1e1e!important}
-    .ngx-charts .data-label{fill:#d0d0d0!important;font-size:11px!important;font-weight:600!important}
-    .ngx-charts .pie-label{fill:#bbb!important;font-size:11px!important}
-    .ngx-charts .pie-label-line{stroke:#333!important}
-    .ngx-charts .x.axis .tick text,.ngx-charts .y.axis .tick text{fill:#888!important;font-size:11px!important}
-    .ngx-charts .axis-label{fill:#555!important}
-    .ngx-charts .tooltip-anchor{fill:#fff!important}
-    .ngx-charts .bar:hover,.ngx-charts .cell:hover{opacity:.85}
-    .chart-legend .legend-label-text{color:#888!important;font-size:11px!important}
-    .chart-legend .legend-title-text{color:#555!important;font-size:11px!important}
-
-    /* ── TXNS ── */
-    .txn-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px}
-    .txn-ct{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px}
-    .txn-tools{display:flex;gap:8px;flex-wrap:wrap}
-    .ctl{background:var(--surface);border:1px solid var(--border);color:#aaa;border-radius:7px;padding:7px 10px;font-size:12px;outline:none;transition:all .15s}
-    .ctl:focus,.ctl:hover{border-color:var(--border2);color:var(--text)}
-    .ctl-search{min-width:170px}
-    .tbl-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-    .tbl{width:100%;border-collapse:collapse}
-    .tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #161616}
-    .tbl td{padding:10px 14px;border-bottom:1px solid #111;vertical-align:middle}
-    .tbl tr:last-child td{border-bottom:none}
-    .tbl tr:hover td{background:#111}
-    .td-m{color:#ddd;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .td-a{font-weight:600;font-variant-numeric:tabular-nums}
-    .td-a.r{color:var(--red)} .td-a.g{color:var(--green)}
-    .td-d,.td-c{color:#666;font-size:11px}
-    .td-st{font-size:11px} .td-st.g{color:var(--green)} .td-st.r{color:var(--red)}
-    .pill{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
-    .ps{background:#1f0e0e;color:var(--red)} .pr{background:#0e1f0e;color:var(--green)}
-    .load-more{text-align:center;padding:14px;color:#666;cursor:pointer;font-size:12px;border-top:1px solid #131313}
-    .load-more:hover{color:#aaa}
-
-    /* ── AI ── */
-    .ai-wrap{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
-    .ai-side{width:210px;flex-shrink:0;border-right:1px solid var(--border);padding:16px 14px;overflow-y:auto;background:#0a0a0a;display:flex;flex-direction:column;gap:0}
-    .as-sec{padding:10px 0;display:flex;flex-direction:column;gap:6px}
-    .as-div{height:1px;background:var(--border)}
-    .as-lbl{font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px}
-    .as-status{display:flex;align-items:center;gap:6px;font-size:11px;padding:7px 9px;border-radius:7px}
-    .as-status.on{background:#0a1a0f;color:var(--green);border:1px solid #0f2a18}
-    .as-status.off{background:#1a0a0a;color:var(--red);border:1px solid #2a0f0f}
-    .as-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
-    .as-cmd{display:block;font-size:11px;color:#444;padding:5px 8px;background:#111;border-radius:5px;font-family:monospace}
-    .as-idx{font-size:10px;color:var(--green);opacity:.6}
-    .as-btn{background:#141414;border:1px solid var(--border);color:#666;border-radius:6px;padding:8px;font-size:11px;cursor:pointer;transition:all .15s}
-    .as-btn:hover:not(:disabled){background:#1a1a1a;color:#aaa}
-    .as-btn:disabled{opacity:.3;cursor:default}
-    .as-q{background:none;border:none;color:#666;font-size:11px;text-align:left;padding:5px 0;cursor:pointer;line-height:1.6;transition:color .15s}
-    .as-q:hover{color:#aaa}
-    .ai-chat{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
-    .chat-msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;min-height:0;scroll-behavior:smooth}
-    .chat-empty{margin:auto;text-align:center}
-    .ce-t{font-size:16px;font-weight:500;color:#666;margin-bottom:6px}
-    .ce-s{font-size:12px;color:#222}
-    .msg-row{display:flex}
-    .msg-row.user{justify-content:flex-end}
-    .bub{max-width:75%;padding:11px 15px;border-radius:12px;font-size:13px;line-height:1.65}
-    .bu{background:#181818;color:#e8e8e8;border:1px solid #222;border-bottom-right-radius:3px}
-    .bb{background:#111;border:1px solid var(--border);color:#aaa;border-bottom-left-radius:3px}
-    .ld{display:flex;gap:4px;align-items:center;height:18px}
-    .ld i{display:block;width:5px;height:5px;background:#2a2a2a;border-radius:50%;animation:blink 1.2s infinite;font-style:normal}
-    .ld i:nth-child(2){animation-delay:.2s} .ld i:nth-child(3){animation-delay:.4s}
-    @keyframes blink{0%,80%,100%{opacity:.15}40%{opacity:1}}
-    .src{margin-top:8px;font-size:10px}
-    .src details summary{cursor:pointer;color:#666}
-    .src ul{margin:4px 0 0 10px;color:#666;line-height:1.7}
-    .chat-bar{border-top:1px solid var(--border);padding:14px 18px;display:flex;gap:8px;flex-shrink:0}
-    .chat-in{flex:1;background:#111;border:1px solid var(--border);color:#e8e8e8;border-radius:8px;padding:10px 14px;font-size:13px;outline:none;font-family:inherit;transition:border-color .15s}
-    .chat-in:focus{border-color:var(--border2)}
-    .chat-send{width:40px;height:40px;background:var(--surface);border:1px solid var(--border);color:#aaa;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
-    .chat-send:not(:disabled):hover{background:#222;color:var(--text);border-color:var(--border2)}
-    .chat-send:disabled{opacity:.25;cursor:default}
-
-
-    .excluded-row td { opacity:.45 }
-    .dim { opacity:.4 }
-    .td-cat { min-width:130px }
-    .cat-cell { display:flex; align-items:center; gap:5px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .15s }
-    .cat-cell:hover { background:#1a1a1a }
-    .cat-lbl { font-size:12px; color:#aaa }
-    .cat-lbl.custom-cat { color:#a78bfa }
-    .cat-edit-ico { font-size:10px; color:#666; opacity:0; transition:opacity .15s }
-    .cat-cell:hover .cat-edit-ico { opacity:1 }
-    .cat-edit-wrap { display:flex; align-items:center; gap:4px; flex-wrap:wrap }
-    .cat-sel { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 6px; font-size:11px; outline:none; max-width:140px }
-    .cat-custom-in { background:#111; border:1px solid var(--border2); color:var(--text); border-radius:5px; padding:4px 8px; font-size:11px; outline:none; width:120px }
-    .cat-save { background:#0a2a14; border:1px solid #1a5a2a; color:var(--green); border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
-    .cat-cancel { background:#1a1a1a; border:1px solid var(--border); color:#666; border-radius:4px; padding:3px 7px; font-size:11px; cursor:pointer }
-    .td-toggle { text-align:center; width:40px }
-    .toggle-btn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 6px; border-radius:4px; transition:all .15s; line-height:1 }
-    .toggle-btn.on { color:var(--green) }
-    .toggle-btn.off { color:#666 }
-    .toggle-btn:hover { background:#1a1a1a }
-    .txn-excl { font-size:11px; color:#666; font-weight:400 }
-
-    /* ── Received strip ── */
-    .recv-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
-    .recv-kpi{background:#0f1a0f;padding:16px 20px}
-    .recv-val{font-size:20px;font-weight:700;color:#4ade80;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
-    .recv-val.r{color:var(--red)} .recv-val.g{color:var(--green)}
-    .recv-lbl{font-size:10px;color:#2a5a2a;text-transform:uppercase;letter-spacing:.6px;margin-top:4px;font-weight:600}
-
-    /* ── Admin ── */
-    .admin-lnk{color:#f59e0b!important}
-    .admin-lnk.on{background:#1a1505!important;color:#fbbf24!important}
-    .sb-badge-red{margin-left:auto;font-size:10px;background:#4ade80;color:#0a0a0a;padding:1px 6px;border-radius:10px;font-weight:700}
-    .admin-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-    .admin-title{font-size:18px;font-weight:600;color:#f0f0f0}
-    .admin-refresh{background:#141414;border:1px solid var(--border);color:#aaa;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px}
-    .admin-refresh:hover{border-color:var(--border2);color:#e0e0e0}
-    .admin-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px}
-    .admin-kpi{background:var(--bg);padding:18px 20px}
-    .admin-kpi.online{background:#0a1a0a}
-    .ak-val{font-size:24px;font-weight:700;color:#f0f0f0;letter-spacing:-.5px}
-    .ak-val.g{color:#4ade80}
-    .ak-lbl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.6px;margin-top:4px;display:flex;align-items:center;gap:4px}
-    .online-dot{color:#4ade80;animation:pg 2s infinite}
-    .admin-section{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-    .admin-section-title{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;padding:14px 16px;border-bottom:1px solid var(--border)}
-    .admin-tbl-box{overflow-x:auto}
-    .admin-tbl{width:100%;border-collapse:collapse}
-    .admin-tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #161616}
-    .admin-tbl td{padding:10px 14px;border-bottom:1px solid #111;font-size:13px}
-    .admin-tbl tr:last-child td{border-bottom:none}
-    .online-row td{background:#0a1209}
-    .au-name{color:#e0e0e0;font-weight:500}
-    .au-email{color:#aaa}
-    .au-txn{color:#aaa;font-variant-numeric:tabular-nums}
-    .au-time{color:#666;font-size:11px}
-    .status-pill{padding:3px 9px;border-radius:10px;font-size:11px;font-weight:600}
-    .online-pill{background:#0a2a14;color:#4ade80;border:1px solid #1a5a2a}
-    .offline-pill{background:#1a1a1a;color:#666;border:1px solid var(--border)}
-    .role-pill{padding:3px 9px;border-radius:10px;font-size:11px;background:#1a1a1a;color:#666}
-    .admin-pill{background:#1a1505;color:#fbbf24}
-
-
-    .sb-logout.secondary{color:#555;font-size:11px;background:none;border:none;cursor:pointer;text-align:left;padding:3px 0}
-    .pw-form{display:flex;flex-direction:column;gap:6px;padding:8px;background:#0d0d0d;border-radius:8px;border:1px solid var(--border)}
-    .pw-in{background:#111;border:1px solid var(--border);color:#e0e0e0;border-radius:6px;padding:7px 10px;font-size:12px;outline:none}
-    .pw-in:focus{border-color:var(--border2)}
-    .pw-msg{font-size:11px;padding:3px 0}
-    .pw-msg.ok{color:#4ade80} .pw-msg.err{color:#f87171}
-    .pw-save{background:#f0f0f0;color:#0a0a0a;border:none;border-radius:6px;padding:7px;font-size:12px;font-weight:600;cursor:pointer}
-    .pw-save:hover{background:#ddd}
-    .online-count{margin-left:auto;font-size:11px;color:#4ade80;font-weight:400;text-transform:none;letter-spacing:0}
-    .au-del{background:none;border:none;color:#3a2020;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;transition:all .15s}
-    .au-del:hover{background:#1f0a0a;color:#f87171}
-    .admin-section-title{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center}
-
-    /* AI tab - single column, no side panel */
-    .ai-wrap{display:flex;flex-direction:column;flex:1;overflow:hidden}
-    .ai-topbar{border-bottom:1px solid var(--border);padding:10px 20px;background:#0a0a0a;flex-shrink:0;max-height:130px;overflow:hidden}
-    .ai-status-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-    .ait-status{display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:6px}
-    .ait-status.on{background:#0a1a0f;color:#4ade80;border:1px solid #1a4a2a}
-    .ait-status.off{background:#1a0a0a;color:#f87171;border:1px solid #4a1a1a}
-    .ait-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
-    .ait-idx{font-size:11px;color:#555}
-    .ait-btn{background:#161616;border:1px solid var(--border);color:#888;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;transition:all .15s}
-    .ait-btn:hover:not(:disabled){background:#1e1e1e;color:#ccc}
-    .ait-btn:disabled{opacity:.3;cursor:default}
-    .ai-suggestions{display:flex;gap:6px;flex-wrap:wrap;max-height:80px;overflow-y:auto}
-    .ait-sugg{background:#111;border:1px solid var(--border);color:#666;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
-    .ait-sugg:hover{border-color:var(--border2);color:#bbb;background:#161616}
-
-    /* ── Admin Dashboard ── */
-    .adm-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px}
-    .adm-title{font-size:20px;font-weight:600;color:#f0f0f0;letter-spacing:-.3px}
-    .adm-sub{font-size:12px;color:#555;margin-top:3px}
-    .adm-refresh{background:#1a1a1a;border:1px solid #252525;color:#888;padding:8px 16px;border-radius:7px;cursor:pointer;font-size:13px;transition:all .15s}
-    .adm-refresh:hover:not(:disabled){background:#222;color:#e0e0e0}
-    .adm-refresh:disabled{opacity:.4;cursor:default}
-
-    .adm-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:#252525;border:1px solid #252525;border-radius:12px;overflow:hidden;margin-bottom:20px}
-    .adm-kpi{background:#0f0f0f;padding:20px 22px}
-    .adm-kpi-green{background:#0a150a}
-    .adm-kpi-n{font-size:28px;font-weight:700;color:#ffffff;letter-spacing:-1px;font-variant-numeric:tabular-nums}
-    .adm-kpi-green .adm-kpi-n{color:#4ade80}
-    .adm-kpi-l{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.6px;margin-top:5px;font-weight:600}
-
-    .adm-card{background:#111;border:1px solid #1e1e1e;border-radius:12px;overflow:hidden;margin-bottom:16px}
-    .adm-card-head{padding:14px 18px;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #161616;display:flex;align-items:center;gap:10px}
-    .adm-online-badge{font-size:11px;background:#0a2a14;color:#4ade80;padding:2px 9px;border-radius:10px;font-weight:600;text-transform:none;letter-spacing:0}
-    .adm-total-badge{font-size:11px;background:#1a1a1a;color:#555;padding:2px 9px;border-radius:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:auto}
-    .adm-empty{padding:32px;text-align:center;color:#333;font-size:13px}
-
-    .adm-tbl{width:100%;border-collapse:collapse}
-    .adm-tbl th{text-align:left;padding:10px 14px;font-size:10px;font-weight:600;color:#333;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #161616}
-    .adm-tbl td{padding:11px 14px;border-bottom:1px solid #111;vertical-align:middle}
-    .adm-tbl tr:last-child td{border-bottom:none}
-    .adm-row-online td{background:#0a120a}
-    .adm-status{font-size:14px;font-weight:700}
-    .adm-online{color:#4ade80}
-    .adm-offline{color:#2a2a2a}
-    .adm-name{font-size:13px;color:#e0e0e0;font-weight:500}
-    .adm-email{font-size:12px;color:#888}
-    .adm-num{font-size:13px;color:#aaa;font-variant-numeric:tabular-nums}
-    .adm-dim{font-size:11px;color:#444}
-    .adm-role{font-size:11px;padding:3px 9px;border-radius:5px;background:#1a1a1a;color:#555}
-    .adm-role-admin{background:#1a1505;color:#fbbf24}
-    .adm-del{background:none;border:none;color:#2a1515;cursor:pointer;font-size:14px;padding:3px 8px;border-radius:5px;transition:all .15s}
-    .adm-del:hover{background:#1f0a0a;color:#f87171}
-
-    @media(max-width:768px){
-      .sidebar{position:fixed;left:-240px;top:0;z-index:50;transition:left .2s}
-      .sidebar.open{left:0}
-      .overlay{display:block}
-      .burger{display:flex}
-      .grid{grid-template-columns:1fr}
-      .card.wide{grid-column:1}
-      .ai-wrap{flex-direction:column}
-      .ai-side{width:100%;border-right:none;border-bottom:1px solid var(--border)}
-      .pie-wrap{flex-direction:column}
-    }
-  `]
+  templateUrl: './app.component.html',
+  styleUrl: './app.component.css',
 })
-export class AppComponent implements OnInit {
-  @ViewChild('chatWin') chatWin!: ElementRef;
+export class AppComponent implements OnInit, OnDestroy {
+  @ViewChild('chatWin') chatWin?: ElementRef<HTMLElement>;
 
-  // Auth
-  currentUser: User | null = null;
-  isAdmin = false;
-  adminStats: any = null;
-  adminUsers: any[] = [];
-  adminLoading = false;
-  _adminTimer: any = null;
-  showChangePw = false;
-  pwCurrent = ''; pwNew = ''; pwConfirm = '';
-  pwMsg = ''; pwOk = false;
-  authMode = 'login';
+  // ── auth ──
+  user: User | null = null;
+  authMode: 'login' | 'register' = 'login';
   authName = ''; authEmail = ''; authPassword = '';
   authError = ''; authLoading = false;
 
-  // App
+  // ── shell ──
   tab = 'overview';
   sidebarOpen = false;
+  toast = { msg: '', ok: true };
+  private toastTimer: any;
+  showPw = false; pwCurrent = ''; pwNew = ''; pwConfirm = ''; pwMsg = ''; pwOk = false; pwBusy = false;
+
+  // ── data ──
+  analytics: any = null;
   transactions: any[] = [];
   filteredTxns: any[] = [];
-  analytics: any = null;
   totalStored = 0;
   dateMin = ''; dateMax = '';
   filterFrom = ''; filterTo = '';
   uploading = false;
-  toast = { msg: '', ok: true };
-  showN = 100;
-  allCats: string[] = [];
-  fType = ''; fCat = ''; fSearch = ''; fIncluded = '';
-  allSystemCats: string[] = ['Credit Card','Education','Entertainment','Food & Grocery',
-    'Healthcare','Other','Shopping','Transfer','Transport','Travel','Utilities'];
-  editingCat: number|null = null;
-  editingCatVal = '';
-  customCatInput = '';
+  loadingData = false;
+  allCategories: string[] = [];
 
-  // AI
-  messages: Message[] = [];
+  // ── transactions table ──
+  fType = ''; fCat = ''; fStatus = ''; fSearch = '';
+  showN = 100;
+  editingId: number | null = null;
+  editVal = ''; editNew = '';
+
+  // ── chart data ──
+  pieData: any[] = []; pieScheme: any = { domain: PALETTE };
+  monthlyData: any[] = []; merchantData: any[] = []; weekdayData: any[] = [];
+  weeklyData: any[] = []; compareData: any[] = []; incomeData: any[] = []; recurringTop: any[] = [];
+  schemeMain: any = { domain: PALETTE };
+  schemeCompare: any = { domain: ['#f87171', '#4ade80'] };
+  schemeGreen: any = { domain: ['#4ade80', '#34d399', '#6ee7b7', '#86efac', '#bbf7d0'] };
+  schemeLine: any = { domain: ['#60a5fa'] };
+
+  // ── AI ──
+  messages: Msg[] = [];
   question = '';
   chatLoading = false;
-  ollamaOk = false;
-  indexedCount = 0;
-  indexing = false;
-  status: any = null;
+  ai: any = null;           // {running, provider, model, error}
+  index: any = null;        // {status, count, error}
+  suggestions = ['How much did I spend in total?', 'Which category costs me the most?',
+                 'Who sends me money the most?', 'Show my biggest payments', 'How did my spending change month to month?'];
 
-  // Charts
-  pieData:      any[] = [];
-  monthlyData:  any[] = [];
-  weeklyData:   any[] = [];
-  dowData:      any[] = [];
-  merchantData:        any[] = [];
-  receivedSourceData:  any[] = [];
-  monthlyComparedData: any[] = [];
-  receivedCatData:     any[] = [];
-  cardW = 420;
-  wideW = 860;
-
-  schemeCompare: any = { name:'compare', selectable:false, group:'Ordinal', domain:['#f87171','#4ade80'] };
-  schemeGreen:   any = { name:'green',   selectable:false, group:'Ordinal', domain:['#4ade80','#34d399','#6ee7b7','#a7f3d0'] };
-  scheme: any = { domain: ['#60a5fa','#f97316','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#94a3b8','#fb923c','#34d399'] };
-
-  private catColors: Record<string,string> = {
-    'Travel':'#60a5fa','Food':'#f97316','Healthcare':'#4ade80','Shopping':'#a78bfa',
-    'Transport':'#fbbf24','Credit Card':'#f87171','Utilities':'#22d3ee',
-    'Transfer':'#94a3b8','Other':'#555555'
-  };
-
-  suggestions = [
-    'How much did I spend total?',
-    'What are my top expense categories?',
-    'Which merchant cost me the most?',
-    'Show my largest single payments',
-    'How much did I receive vs spend?',
+  // ── about + suggestions ──
+  about: any = {};
+  aboutBlocks: AboutBlock[] = [];
+  editingAbout = false; aboutEdit: any = {}; aboutSaving = false;
+  sgCategory = 'feature'; sgTitle = ''; sgMsg = ''; sgSending = false; sgSent = false; sgError = '';
+  readonly sgCategories = [
+    { id: 'feature', icon: '💡', label: 'Feature' }, { id: 'bug', icon: '🐞', label: 'Bug' },
+    { id: 'design', icon: '🎨', label: 'Design' },   { id: 'other', icon: '💬', label: 'Other' },
   ];
 
-  private api = (() => {
-    if (window.location.hostname === 'localhost') return 'http://localhost:8000/api';
-    // Read from meta tag set by Vercel env var, or fallback to hardcoded
-    const meta = document.querySelector('meta[name="api-url"]') as HTMLMetaElement;
-    if (meta?.content) return meta.content;
-    return 'https://upi-analyzer.onrender.com/api';
-  })();
+  // ── admin ──
+  adminTab: 'users' | 'suggestions' = 'users';
+  adminStats: any = null;
+  adminUsers: any[] = [];
+  adminSugg: any[] = [];
+  adminLoading = false;
+  userSearch = ''; suggFilter = 'all';
 
-  // ── added declarations ──
-  aboutContent: any = {};
-  aboutEdit: any = {};
-  editingAbout = false;
-  showSuggestionForm = false;
-  suggTitle = '';
-  suggMsg = '';
-  suggSent = false;
-  suggErr = '';
-  adminSuggestions: any[] = [];
-  showAdminSugg = false;
+  private hbTimer: any; private adminTimer: any;
 
   constructor(private http: HttpClient) {}
 
+  // ═════════════ lifecycle ═════════════
   ngOnInit() {
-    const saved = localStorage.getItem('upi_token');
-    const user  = localStorage.getItem('upi_user');
-    if (saved && user) {
-      this.currentUser = JSON.parse(user);
-      this.isAdmin = !!this.currentUser?.is_admin;
-      this.init();
-    }
-    this.onResize();
+    this.loadAbout();
+    const token = localStorage.getItem('upi_token');
+    if (!token) return;
+    try { this.user = JSON.parse(localStorage.getItem('upi_user') || 'null'); } catch { this.user = null; }
+    // refresh from the server so role changes (e.g. admin) apply without signing in again
+    this.call<User>('GET', '/auth/me').subscribe({
+      next: u => { this.setUser(u); this.startSession(); },
+      error: () => { /* 401 handled by call() */ },
+    });
+  }
+  ngOnDestroy() { this.stopTimers(); }
+
+  private setUser(u: User) {
+    this.user = u;
+    localStorage.setItem('upi_user', JSON.stringify(u));
+  }
+  get isAdmin(): boolean { return !!this.user?.is_admin; }
+
+  private startSession() {
+    this.resetData();
+    this.loadRange();
+    this.loadCategories();
+    this.checkAi();
+    this.stopTimers();
+    this.sendHeartbeat();
+    this.hbTimer = setInterval(() => this.sendHeartbeat(), 30000);
+    this.adminTimer = setInterval(() => { if (this.tab === 'admin' && this.isAdmin) this.loadAdmin(false); }, 15000);
+  }
+  private stopTimers() { clearInterval(this.hbTimer); clearInterval(this.adminTimer); }
+  private sendHeartbeat() {
+    if (!this.user) return;
+    this.call('POST', '/heartbeat', { tab: TAB_NAMES[this.tab] || this.tab }).subscribe({ error: () => {} });
   }
 
-  @HostListener('window:resize') onResize() {
-    const w = window.innerWidth;
-    const sidebar = w > 768 ? 240 : 0;
-    const padding = 48;
-    const avail = w - sidebar - padding;
-    this.cardW = Math.max(300, Math.min(Math.floor(avail / 2) - 8, 480));
-    this.wideW = Math.max(300, Math.min(avail - 16, 920));
-  }
-
-  // ── AUTH ──────────────────────────────────────────────────────────────────
-  getHeaders(): HttpHeaders {
-    const t = localStorage.getItem('upi_token') || '';
+  // ═════════════ http ═════════════
+  private headers(): HttpHeaders {
+    const t = localStorage.getItem('upi_token');
     return new HttpHeaders(t ? { Authorization: `Bearer ${t}` } : {});
   }
+  private call<T = any>(method: string, path: string, body?: any, params?: Record<string, string>): Observable<T> {
+    return this.http.request<T>(method, API + path, { body, params, headers: this.headers() }).pipe(
+      catchError(e => {
+        if (e.status === 401 && this.user && !path.startsWith('/auth/login')) this.logout(true);
+        return throwError(() => e);
+      }));
+  }
+  errText(e: any, fallback = 'Something went wrong'): string {
+    if (e?.status === 0) return 'Cannot reach the server. If it was idle, wait ~30 seconds and retry.';
+    const d = e?.error?.detail;
+    return typeof d === 'string' ? d : fallback;
+  }
+  flash(msg: string, ok = true) {
+    this.toast = { msg, ok };
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => this.toast = { msg: '', ok: true }, 4500);
+  }
 
+  // ═════════════ auth ═════════════
   submitAuth() {
-    this.authError = ''; this.authLoading = true;
-    const url  = this.authMode === 'login' ? `${this.api}/auth/login` : `${this.api}/auth/register`;
+    this.authError = '';
+    if (!this.authEmail.trim() || !this.authPassword || (this.authMode === 'register' && !this.authName.trim())) {
+      this.authError = 'Please fill in all fields.'; return;
+    }
+    this.authLoading = true;
     const body = this.authMode === 'login'
       ? { email: this.authEmail, password: this.authPassword }
       : { email: this.authEmail, name: this.authName, password: this.authPassword };
-
-    this.http.post<any>(url, body).subscribe({
-      next: (res) => {
-        localStorage.setItem('upi_token', res.token);
-        localStorage.setItem('upi_user', JSON.stringify(res.user));
-        this.currentUser = res.user;
-        this.isAdmin = !!res.user?.is_admin;
-        localStorage.setItem('upi_user', JSON.stringify(res.user));
-        // Clear previous user data
-        this.transactions = []; this.filteredTxns = [];
-        this.messages = []; this.analytics = null;
-        this.totalStored = 0; this.tab = 'overview';
-        this.authLoading = false;
-        this.init();
+    this.call<any>('POST', this.authMode === 'login' ? '/auth/login' : '/auth/register', body).subscribe({
+      next: r => {
+        localStorage.setItem('upi_token', r.token);
+        this.authLoading = false; this.authPassword = '';
+        this.tab = 'overview';
+        this.setUser(r.user);
+        this.startSession();
       },
-      error: (err) => {
-        this.authError = err.error?.detail || 'Something went wrong';
-        this.authLoading = false;
-      }
+      error: e => { this.authLoading = false; this.authError = this.errText(e, 'Sign in failed'); },
     });
   }
-
-  logout() {
-    localStorage.removeItem('upi_token');
-    localStorage.removeItem('upi_user');
-    this.currentUser = null;
-    this.isAdmin     = false;
-    this.analytics   = null;
-    this.totalStored = 0;
-    this.transactions = [];
-    this.filteredTxns = [];
-    this.messages     = [];
-    this.question     = '';
-    this.tab          = 'overview';
-    this.filterFrom   = '';
-    this.filterTo     = '';
-    this.pieData = []; this.monthlyData = []; this.merchantData = [];
-    this.receivedSourceData = []; this.monthlyComparedData = [];
-  }
-
-  init() {
-    this.checkOllama();
-    this.loadDateRange();
-    this.loadCategories();
-    // Recalculate chart sizes after DOM is ready
-    setTimeout(() => this.onResize(), 100);
-    this.loadAbout();
-  }
-
-  loadCategories() {
-    this.http.get<any>(`${this.api}/categories`, { headers: this.getHeaders() }).subscribe({
-      next: (r) => { if (r.categories?.length) this.allSystemCats = r.categories; },
-      error: () => {}
-    });
-  }
-
-  // ── HELPERS ───────────────────────────────────────────────────────────────
-  tabLabel() { return ({overview:'Overview',analytics:'Analytics',transactions:'Transactions',ai:'AI Chat',about:'About',admin:'Admin'} as any)[this.tab]||''; }
-  go(t: string) {
-    if (t === 'admin') setTimeout(() => this.loadAdminData(), 100);
-    if (t === 'about' && !this.aboutContent?.about_title) this.loadAbout();
-    if (t !== 'admin') clearTimeout((this as any)._adminTimer);
-    this.tab = t;
-    this.sidebarOpen = false;
-    if (t === 'admin') {
-      this.loadAdminData();
+  logout(expired = false) {
+    if (!expired && localStorage.getItem('upi_token')) {
+      this.http.post(API + '/auth/logout', {}, { headers: this.headers() }).subscribe({ error: () => {} });
     }
+    this.stopTimers();
+    localStorage.removeItem('upi_token'); localStorage.removeItem('upi_user');
+    this.user = null; this.tab = 'overview'; this.sidebarOpen = false;
+    this.resetData(); this.messages = []; this.question = '';
+    this.adminStats = null; this.adminUsers = []; this.adminSugg = [];
+    this.ai = null; this.index = null; this.showPw = false;
+    if (expired) this.authError = 'Your session ended. Please sign in again.';
   }
-  pct(v: number, total: number) { return total > 0 ? (v / total) * 100 : 0; }
-  autoType(e: any) { return (e.target?.files?.[0]?.name||'').endsWith('.pdf') ? 'pdf' : 'csv'; }
-  showToast(msg: string, ok = true) { this.toast={msg,ok}; setTimeout(()=>this.toast={msg:'',ok:true},4000); }
-
-  // ── UPLOAD ────────────────────────────────────────────────────────────────
-  onFile(e: any, type: string) {
-    const f = e.target?.files?.[0]; e.target.value = '';
-    if (f) this.process(f, type);
+  private resetData() {
+    this.analytics = null; this.transactions = []; this.filteredTxns = []; this.totalStored = 0;
+    this.filterFrom = ''; this.filterTo = ''; this.dateMin = ''; this.dateMax = '';
+    this.pieData = []; this.monthlyData = []; this.merchantData = []; this.weekdayData = [];
+    this.weeklyData = []; this.compareData = []; this.incomeData = []; this.recurringTop = [];
+  }
+  changePassword() {
+    this.pwMsg = '';
+    if (this.pwNew.length < 6) { this.pwMsg = 'New password must be at least 6 characters'; this.pwOk = false; return; }
+    if (this.pwNew !== this.pwConfirm) { this.pwMsg = 'Passwords do not match'; this.pwOk = false; return; }
+    this.pwBusy = true;
+    this.call('POST', '/auth/change-password', { current_password: this.pwCurrent, new_password: this.pwNew }).subscribe({
+      next: () => {
+        this.pwBusy = false; this.pwOk = true; this.pwMsg = 'Password changed.';
+        this.pwCurrent = this.pwNew = this.pwConfirm = '';
+        setTimeout(() => { this.showPw = false; this.pwMsg = ''; }, 1400);
+      },
+      error: e => { this.pwBusy = false; this.pwOk = false; this.pwMsg = this.errText(e); },
+    });
   }
 
-  process(file: File, type: string) {
+  // ═════════════ navigation ═════════════
+  go(t: string) {
+    this.tab = t; this.sidebarOpen = false;
+    this.sendHeartbeat();
+    if (t === 'admin') this.loadAdmin();
+    if (t === 'ai') { this.checkAi(); this.scrollChat(); }
+    if (t === 'about') this.loadAbout();
+  }
+  get title(): string { return TAB_NAMES[this.tab] || ''; }
+
+  // ═════════════ data ═════════════
+  private rangeParams(): Record<string, string> {
+    const p: Record<string, string> = {};
+    if (this.filterFrom) p['date_from'] = this.filterFrom;
+    if (this.filterTo) p['date_to'] = this.filterTo;
+    return p;
+  }
+  loadRange() {
+    this.call<any>('GET', '/date-range').subscribe({
+      next: r => {
+        this.totalStored = r.count || 0; this.dateMin = r.min || ''; this.dateMax = r.max || '';
+        if (this.totalStored) this.refresh(); else { this.analytics = null; this.transactions = []; this.filteredTxns = []; }
+      },
+      error: () => {},
+    });
+  }
+  refresh() {
+    this.loadingData = true;
+    this.call<any>('GET', '/analytics', undefined, this.rangeParams()).subscribe({
+      next: a => { this.analytics = a; this.buildCharts(); this.loadingData = false; },
+      error: e => { if (e.status === 404) { this.analytics = null; this.buildCharts(); } this.loadingData = false; },
+    });
+    this.call<any>('GET', '/transactions', undefined, this.rangeParams()).subscribe({
+      next: r => { this.transactions = r.transactions || []; this.applyFilters(); },
+      error: () => {},
+    });
+  }
+  private refreshAnalyticsOnly() {
+    this.call<any>('GET', '/analytics', undefined, this.rangeParams()).subscribe({
+      next: a => { this.analytics = a; this.buildCharts(); },
+      error: e => { if (e.status === 404) { this.analytics = null; this.buildCharts(); } },
+    });
+  }
+  loadCategories() {
+    this.call<any>('GET', '/categories').subscribe({ next: r => this.allCategories = r.categories || [], error: () => {} });
+  }
+
+  // date filter
+  onDates() { this.refresh(); }
+  allTime() { this.filterFrom = ''; this.filterTo = ''; this.refresh(); }
+  thisMonth() {
+    const n = new Date();
+    this.setRange(new Date(n.getFullYear(), n.getMonth(), 1), new Date(n.getFullYear(), n.getMonth() + 1, 0));
+  }
+  lastDays(d: number) {
+    const to = this.dateMax ? new Date(this.dateMax + 'T00:00:00') : new Date();
+    const from = new Date(to); from.setDate(from.getDate() - d + 1);
+    this.setRange(from, to);
+  }
+  private setRange(a: Date, b: Date) {
+    const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    this.filterFrom = f(a); this.filterTo = f(b); this.refresh();
+  }
+  get rangeLabel(): string {
+    if (!this.filterFrom && !this.filterTo) return 'All time';
+    return `${this.filterFrom || '…'} → ${this.filterTo || '…'}`;
+  }
+
+  // upload
+  onFile(ev: Event) {
+    const input = ev.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.csv') && !name.endsWith('.pdf')) { this.flash('Please choose a .csv or .pdf statement', false); return; }
     this.uploading = true;
     const fd = new FormData(); fd.append('file', file);
-    const url = type === 'pdf' ? `${this.api}/upload` : `${this.api}/upload-csv`;
-    this.http.post<any>(url, fd, { headers: this.getHeaders() }).subscribe({
-      next: (r) => {
+    this.http.post<any>(API + (name.endsWith('.pdf') ? '/upload' : '/upload-csv'), fd, { headers: this.headers() }).subscribe({
+      next: r => {
         this.uploading = false;
-        this.totalStored = r.total_stored;
-        this.showToast(`${r.inserted} new · ${r.skipped} duplicates skipped · ${r.total_stored} total`);
-        this.loadDateRange(); this.loadAnalytics(); this.autoIndex();
+        this.flash(`${r.format}: ${r.inserted} new, ${r.skipped} already saved. ${r.total_stored} total.`);
+        this.loadRange(); this.loadCategories();
+        this.call('POST', '/rag/index').subscribe({ error: () => {} });
       },
-      error: (err) => { this.uploading=false; this.showToast(err.error?.detail||'Import failed', false); }
-    });
-  }
-
-  loadDateRange() {
-    this.http.get<any>(`${this.api}/date-range`, { headers: this.getHeaders() }).subscribe({
-      next: (r) => {
-        this.totalStored = r.count || 0;
-        this.dateMin = r.min || '';
-        this.dateMax = r.max || '';
-        if (!this.filterFrom) this.filterFrom = r.min || '';
-        if (!this.filterTo)   this.filterTo   = r.max || '';
-        if (this.totalStored > 0) this.loadAnalytics();
+      error: e => {
+        this.uploading = false;
+        if (e.status === 401) this.logout(true); else this.flash(this.errText(e, 'Import failed'), false);
       },
-      error: () => {}
     });
   }
-
-  onDateFilter() { this.loadAnalytics(); }
-
-  reloadAnalyticsOnly() {
-    const p: any = {};
-    if (this.filterFrom) p['date_from'] = this.filterFrom;
-    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
-    this.http.get<any>(`${this.api}/analytics`, { params: p, headers: this.getHeaders() }).subscribe({
-      next: (a) => { this.analytics = a; this.buildCharts(); },
-      error: () => {}
+  clearAll() {
+    if (!confirm('Delete ALL your saved transactions? This cannot be undone.')) return;
+    this.call('DELETE', '/transactions').subscribe({
+      next: () => { this.resetData(); this.flash('All transactions deleted'); },
+      error: e => this.flash(this.errText(e), false),
     });
   }
-
-  clearAllDates() {
-    this.filterFrom = '';
-    this.filterTo   = '';
-    this.loadAnalytics();
+  downloadSample() {
+    const csv = 'Date\tTime\tTransaction Details\tTransaction ID\tUTR\tTransaction Type\tCredit/debit instrument\tAmount\n' +
+      'Jun 15, 2026\t7:20 PM\tReceived from Alex\tT1\t1\tCREDIT\tCredited to XXXXXX0000\t8000\n' +
+      'Jun 16, 2026\t1:05 PM\tPaid to Zomato\tT2\t2\tDEBIT\tDebited from XXXXXX0000\t340\n';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = 'sample-phonepe.csv'; a.click();
   }
 
-  resetDates() {
-    this.filterFrom = this.dateMin;
-    this.filterTo   = this.dateMax;
-    this.loadAnalytics();
+  // ═════════════ formatting ═════════════
+  /** compact form for chart axes and labels: ₹850, ₹4.3k, ₹1.2L, ₹2Cr */
+  compact = (v: any): string => {
+    const n = Number(v) || 0, a = Math.abs(n);
+    const f = (x: number) => String(Math.round(x * 10) / 10).replace(/\.0$/, '');
+    if (a >= 1e7) return '₹' + f(n / 1e7) + 'Cr';
+    if (a >= 1e5) return '₹' + f(n / 1e5) + 'L';
+    if (a >= 1e3) return '₹' + f(n / 1e3) + 'k';
+    return '₹' + Math.round(n);
+  };
+  inr = (v: any): string => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
+  pct(v: number, total: number): number { return total > 0 ? (v / total) * 100 : 0; }
+  monthLabel(k: string): string {
+    const [y, m] = (k || '').split('-');
+    return MONTHS[+m - 1] ? `${MONTHS[+m - 1]} ${String(y).slice(2)}` : k;
+  }
+  private utc(iso: string): Date { return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z'); }
+  ago(iso: string | null): string {
+    if (!iso) return 'never';
+    const s = Math.max(0, (Date.now() - this.utc(iso).getTime()) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return `${Math.floor(s / 86400)} d ago`;
+  }
+  when(iso: string | null): string {
+    return iso ? this.utc(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—';
+  }
+  colorOf(name: string): string {
+    if (FIXED_COLORS[name]) return FIXED_COLORS[name];
+    let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return PALETTE[h % PALETTE.length];
   }
 
-  setThisMonth() {
-    const now   = new Date();
-    const first = new Date(now.getFullYear(), now.getMonth(), 1);
-    const last  = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    this.filterFrom = first.toISOString().slice(0,10);
-    this.filterTo   = last.toISOString().slice(0,10);
-    this.loadAnalytics();
-  }
-
-  setLast30() {
-    const to   = new Date();
-    const from = new Date(); from.setDate(from.getDate() - 30);
-    this.filterFrom = from.toISOString().slice(0,10);
-    this.filterTo   = to.toISOString().slice(0,10);
-    this.loadAnalytics();
-  }
-
-  loadAnalytics() {
-    const p: any = {};
-    if (this.filterFrom) p['date_from'] = this.filterFrom;
-    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
-    this.http.get<any>(`${this.api}/analytics`, { params: p, headers: this.getHeaders() }).subscribe({
-      next: (a) => {
-        this.analytics = a;
-        this.buildCharts();
-        this.loadTransactions();
-      },
-      error: (err) => {
-        // 404 means no transactions in range — clear analytics
-        if (err.status === 404) { this.analytics = null; this.transactions = []; this.filteredTxns = []; }
-      }
-    });
-  }
-
-  loadTransactions() {
-    const p: any = {};
-    if (this.filterFrom) p['date_from'] = this.filterFrom;
-    if (this.filterTo)   p['date_to']   = this.filterTo + 'T23:59:59';
-    this.http.get<any>(`${this.api}/transactions`, { params: p, headers: this.getHeaders() }).subscribe({
-      next: (r) => {
-        this.transactions = r.transactions || [];
-        this.filteredTxns = [...this.transactions];
-        this.allCats = [...new Set(this.transactions.map((t:any) => t.category).filter(Boolean))] as string[];
-        this.applyFilter();
-      },
-      error: () => {}
-    });
-  }
-
-  buildCharts() {
-    const a = this.analytics; if (!a) return;
-
-    const colors = ['#60a5fa','#f97316','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#94a3b8','#fb923c','#34d399'];
-    this.pieData = Object.entries(a.category_breakdown||{})
-      .map(([name,value],i)=>({name,value:Math.abs(value as number),color:this.catColors[name]||colors[i%colors.length]}))
-      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
-
-    this.monthlyData = Object.entries(a.monthly_trend||{})
-      .map(([name,value])=>({name,value:Math.abs(value as number)}));
-
-    const ws = Object.entries(a.weekly_trend||{});
-    this.weeklyData = ws.length>1 ? [{ name:'Spending', series: ws.map(([n,v])=>({name:n.slice(5),value:Math.abs(v as number)})) }] : [];
-
-    const dowOrder=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-    const dow = a.dow_spending||{};
-    this.dowData = dowOrder.map(d=>({name:d.slice(0,3),value:dow[d]||0})).filter(d=>d.value>0);
-
-    this.merchantData = (a.top_merchants||[]).slice(0,8).map((m:any)=>({
-      name: m.name?.length>18 ? m.name.substring(0,18)+'…' : m.name, value: m.spent
+  // ═════════════ charts ═════════════
+  private buildCharts() {
+    const a = this.analytics;
+    if (!a) {
+      this.pieData = []; this.monthlyData = []; this.merchantData = []; this.weekdayData = [];
+      this.weeklyData = []; this.compareData = []; this.incomeData = []; this.recurringTop = []; return;
+    }
+    this.pieData = Object.entries<number>(a.category_breakdown || {})
+      .filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1])
+      .map(([name, value]) => ({ name, value, color: this.colorOf(name) }));
+    this.pieScheme = { domain: this.pieData.map(d => d.color) };
+    this.monthlyData = Object.entries<number>(a.monthly_trend || {}).map(([k, v]) => ({ name: this.monthLabel(k), value: v }));
+    this.merchantData = (a.top_merchants || []).slice(0, 8).map((m: any) => ({ name: this.short(m.name), value: m.spent }));
+    this.recurringTop = (a.recurring_merchants || []).slice(0, 6);
+    this.incomeData = (a.top_received_sources || []).map((m: any) => ({ name: this.short(m.name), value: m.received }));
+    this.weekdayData = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+      .map(d => ({ name: d.slice(0, 3), value: (a.dow_spending || {})[d] || 0 })).filter(d => d.value > 0);
+    const weeks = Object.entries<number>(a.weekly_trend || {});
+    this.weeklyData = weeks.length > 1
+      ? [{ name: 'Spending', series: weeks.map(([k, v]) => ({ name: k.split('-')[1] || k, value: v })) }] : [];
+    this.compareData = (a.monthly_combined || []).map((m: any) => ({
+      name: this.monthLabel(m.month),
+      series: [{ name: 'Spent', value: m.spent }, { name: 'Received', value: m.received }],
     }));
-
-    this.receivedSourceData = (a.top_received_sources||[]).map((r:any)=>({
-      name: r.name?.length>18 ? r.name.substring(0,18)+'…' : r.name, value: r.received
-    }));
-
-    this.monthlyComparedData = [
-      { name: 'Spent',    series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.spent}))    },
-      { name: 'Received', series: (a.monthly_combined||[]).map((m:any)=>({name:m.month, value:m.received})) },
-    ].filter(s => s.series.some((p:any) => p.value > 0));
-
-    this.receivedCatData = Object.entries(a.received_category||{})
-      .map(([name,value])=>({name, value: value as number}))
-      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
-
-    // Update scheme with category colors
-    const catColors = this.pieData.map(d => d.color);
-    const fullColors = [...new Set([...catColors, ...colors])];
-    this.scheme = { name: 'upi', selectable: false, group: 'Ordinal', domain: fullColors };
   }
+  private short(s: string): string { return s && s.length > 20 ? s.slice(0, 19) + '…' : s; }
 
-  applyFilter() {
-    this.filteredTxns = this.transactions.filter(t=>{
-      if (this.fType && t.transaction_type!==this.fType) return false;
-      if (this.fCat  && t.category!==this.fCat) return false;
-      if (this.fSearch && !t.merchant?.toLowerCase().includes(this.fSearch.toLowerCase())) return false;
-      return true;
-    });
+  // ═════════════ transactions table ═════════════
+  applyFilters() {
+    const q = this.fSearch.trim().toLowerCase();
+    this.filteredTxns = this.transactions.filter(t =>
+      (!this.fType || t.transaction_type === this.fType) &&
+      (!this.fCat || t.category === this.fCat) &&
+      (!this.fStatus || (this.fStatus === 'included' ? t.included : !t.included)) &&
+      (!q || (t.merchant || '').toLowerCase().includes(q)));
     this.showN = 100;
   }
-
-  confirmClear() {
-    if (!confirm('Delete ALL your saved transactions? Cannot be undone.')) return;
-    this.http.delete(`${this.api}/transactions`, { headers: this.getHeaders() }).subscribe({
-      next: () => {
-        this.totalStored=0; this.analytics=null; this.transactions=[];
-        this.filteredTxns=[]; this.filterFrom=''; this.filterTo='';
-        this.showToast('All transactions cleared');
-      }
-    });
-  }
-
-  downloadSample() {
-    const d='Name,Bank,Amount,Date,Status\nHumsafar EHT,SBI 9299,-3000.00,30 May 2026,SUCCESS\nNusrat Fatima,SBI XXXXXX9299,+860.00,31 May 2026,SUCCESS\nNEW NATIONAL MEDICAL,SBI 9299,-120.00,30 May 2026,SUCCESS';
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([d],{type:'text/csv'}));
-    a.download='sample.csv'; a.click();
-  }
-
-  // ── AI ────────────────────────────────────────────────────────────────────
-  checkOllama() {
-    this.http.get<any>(`${this.api}/rag/status`, { headers: this.getHeaders() }).subscribe({
-      next: (s) => {
-        this.ollamaOk    = s.ollama?.running || false;
-        this.status      = s.ollama;
-        this.indexedCount = s.indexed_count || 0;
-      },
-      error: () => { this.ollamaOk = false; }
-    });
-  }
-
-  autoIndex() {
-    this.http.post<any>(`${this.api}/rag/index`,{},{headers:this.getHeaders()}).subscribe({
-      next:(r)=>{ this.indexedCount=r.indexed; }, error:()=>{}
-    });
-  }
-
-  reIndex() {
-    this.indexing=true;
-    this.http.post<any>(`${this.api}/rag/index`,{},{headers:this.getHeaders()}).subscribe({
-      next:(r)=>{ this.indexedCount=r.indexed; this.indexing=false; },
-      error:()=>{ this.indexing=false; }
-    });
-  }
-
-  ask(q:string){this.question=q;this.send();}
-
-  send() {
-    const q=this.question.trim(); if(!q||this.chatLoading) return;
-    this.messages.push({role:'user',text:q}); this.question=''; this.chatLoading=true;
-    const ph:Message={role:'assistant',text:'',loading:true};
-    this.messages.push(ph); this.scroll();
-    this.http.post<any>(`${this.api}/rag/query`,{question:q},{headers:this.getHeaders()}).subscribe({
-      next:(r)=>{ this.messages[this.messages.indexOf(ph)]={role:'assistant',text:r.answer,sources:r.sources}; this.chatLoading=false; this.scroll(); },
-      error:()=>{ this.messages[this.messages.indexOf(ph)]={role:'assistant',text:'Error contacting backend.'}; this.chatLoading=false; }
-    });
-  }
-
-  startEditCat(t: any) {
-    this.editingCat = t.id;
-    this.editingCatVal = t.category || '';
-    this.customCatInput = '';
-  }
-
-  onCatChange(t: any) {}
-
-  saveCat(t: any) {
-    const cat = this.editingCatVal === '__custom__'
-      ? this.customCatInput.trim()
-      : this.editingCatVal;
-    if (!cat) return;
-    this.http.patch<any>(`${this.api}/transactions/${t.id}`,
-      { category: cat }, { headers: this.getHeaders() }).subscribe({
-      next: (r) => {
-        t.category        = r.category;        // update in place
-        t.custom_category = r.custom_category;
-        this.editingCat   = null;
-        this.customCatInput = '';
-        if (r.all_categories?.length) {
-          this.allSystemCats = [...r.all_categories];
-          this.allCats       = [...r.all_categories];
-        }
-        // Only reload charts, NOT the transaction list
-        this.reloadAnalyticsOnly();
-        this.showToast('Category set to "' + cat + '"');
-      },
-      error: () => this.showToast('Failed to update category', false)
-    });
-  }
+  get excludedCount(): number { return this.transactions.filter(t => !t.included).length; }
+  get txnCategories(): string[] { return [...new Set(this.transactions.map(t => t.category))].sort(); }
+  trackId = (_: number, t: any) => t.id;
 
   toggleIncluded(t: any) {
-    const newVal = !t.included;
-    t.included = newVal; // optimistic update immediately
-    this.http.patch<any>(`${this.api}/transactions/${t.id}`,
-      { included: newVal }, { headers: this.getHeaders() }).subscribe({
-      next: (r) => {
-        t.included = r.included; // confirm from server
-        // Only reload analytics charts, NOT transactions list
-        this.reloadAnalyticsOnly();
+    const next = !t.included;
+    t.included = next;
+    this.call<any>('PATCH', `/transactions/${t.id}`, { included: next }).subscribe({
+      next: () => this.refreshAnalyticsOnly(),
+      error: e => { t.included = !next; this.flash(this.errText(e, 'Could not update'), false); },
+    });
+  }
+  startEdit(t: any) { this.editingId = t.id; this.editVal = t.category; this.editNew = ''; }
+  cancelEdit() { this.editingId = null; }
+  saveEdit(t: any) {
+    const cat = (this.editVal === '__new__' ? this.editNew : this.editVal).trim();
+    if (!cat) { this.flash('Enter a category name', false); return; }
+    this.call<any>('PATCH', `/transactions/${t.id}`, { category: cat }).subscribe({
+      next: r => {
+        t.category = r.category; t.custom_category = r.custom_category;
+        this.allCategories = r.all_categories || this.allCategories;
+        this.editingId = null;
+        this.refreshAnalyticsOnly();
+        this.flash(`Category set to “${r.category}”`);
       },
-      error: () => {
-        t.included = !newVal; // revert on error
-        this.showToast('Failed to update', false);
-      }
+      error: e => this.flash(this.errText(e, 'Could not update'), false),
     });
   }
 
-    changePassword() {
-    if (this.pwNew !== this.pwConfirm) {
-      this.pwMsg = 'Passwords do not match'; this.pwOk = false; return;
-    }
-    if (this.pwNew.length < 6) {
-      this.pwMsg = 'Min 6 characters'; this.pwOk = false; return;
-    }
-    this.http.post<any>(`${this.api}/auth/change-password`,
-      { current_password: this.pwCurrent, new_password: this.pwNew },
-      { headers: this.getHeaders() }).subscribe({
-      next: () => {
-        this.pwMsg = 'Password changed!'; this.pwOk = true;
-        this.pwCurrent = ''; this.pwNew = ''; this.pwConfirm = '';
-        setTimeout(() => { this.showChangePw = false; this.pwMsg = ''; }, 2000);
+  // ═════════════ AI chat ═════════════
+  checkAi() {
+    this.call<any>('GET', '/rag/status').subscribe({
+      next: r => { this.ai = r.ai; this.index = r.index; },
+      error: () => { this.ai = { running: false, error: 'Cannot reach the server' }; },
+    });
+  }
+  reindex() {
+    this.call<any>('POST', '/rag/index').subscribe({
+      next: () => { this.flash('Re-indexing in the background'); setTimeout(() => this.checkAi(), 2500); },
+      error: e => this.flash(this.errText(e), false),
+    });
+  }
+  ask(q: string) { this.question = q; this.send(); }
+  send() {
+    const q = this.question.trim();
+    if (!q || this.chatLoading) return;
+    this.messages.push({ role: 'user', text: q });
+    const pending: Msg = { role: 'assistant', text: '', loading: true };
+    this.messages.push(pending);
+    this.question = ''; this.chatLoading = true; this.scrollChat();
+    this.call<any>('POST', '/rag/query', { question: q }).subscribe({
+      next: r => {
+        pending.loading = false; pending.text = r.answer || 'No answer.'; pending.error = !!r.error;
+        pending.meta = r.model ? `${r.model} · ${r.retrieval || 'keyword'} search` : '';
+        this.chatLoading = false; this.scrollChat(); this.checkAi();
       },
-      error: (e) => { this.pwMsg = e.error?.detail || 'Failed'; this.pwOk = false; }
-    });
-  }
-
-  deleteUser(u: any) {
-    if (!confirm(`Delete ${u.name} (${u.email}) and ALL their transactions? Cannot be undone.`)) return;
-    this.http.delete(`${this.api}/admin/users/${u.id}`, { headers: this.getHeaders() }).subscribe({
-      next: () => {
-        this.adminUsers = this.adminUsers.filter(x => x.id !== u.id);
-        this.showToast(`${u.name} deleted`);
-        this.loadAdminData();
+      error: e => {
+        pending.loading = false; pending.error = true; this.chatLoading = false;
+        pending.text = this.errText(e, 'The server returned an error. Please try again.'); this.scrollChat();
       },
-      error: (e) => this.showToast(e.error?.detail || 'Delete failed', false)
     });
   }
-
-  loadAdminData() {
-    this.adminLoading = true;
-    // auto-refresh every 30s when on admin tab
-    if (this.tab === 'admin') {
-      clearTimeout((this as any)._adminTimer);
-      (this as any)._adminTimer = setTimeout(() => this.loadAdminData(), 30000);
-    }
-    this.http.get<any>(`${this.api}/admin/stats`, { headers: this.getHeaders() }).subscribe({
-      next: (s) => { this.adminStats = s; },
-      error: () => {}
-    });
-    this.http.get<any>(`${this.api}/admin/users`, { headers: this.getHeaders() }).subscribe({
-      next: (r) => { this.adminUsers = r.users || []; this.adminLoading = false; },
-      error: () => { this.adminLoading = false; }
-    });
+  clearChat() { this.messages = []; }
+  private scrollChat() {
+    setTimeout(() => { const el = this.chatWin?.nativeElement; if (el) el.scrollTop = el.scrollHeight; }, 30);
+  }
+  /** escape first, then allow **bold**, bullets and line breaks */
+  md(text: string): string {
+    return (text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^\s*[-*]\s+/gm, '• ').replace(/\n/g, '<br>');
   }
 
-
-  // ── ABOUT ──────────────────────────────────────────────────────────────────
+  // ═════════════ about + suggestions ═════════════
   loadAbout() {
-    this.http.get<any>(`${this.api}/about`).subscribe({
-      next: (r) => { this.aboutContent = r; },
-      error: () => {}
+    this.http.get<any>(API + '/about').subscribe({
+      next: r => { this.about = r; this.aboutBlocks = this.parseAbout(r.about_body || ''); },
+      error: () => {},
     });
   }
-
-  aboutBodyHtml(): string {
-    const body = this.aboutContent?.about_body || '';
-    return body.split('\n').map((l: string) =>
-      l.startsWith('•') ? `<li>${l.slice(1).trim()}</li>` : `<p>${l}</p>`
-    ).join('');
+  private parseAbout(body: string): AboutBlock[] {
+    return body.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean).map(block => {
+      const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+      const isItem = (l: string) => /^(•|-|\*|\d+[.)])\s/.test(l);
+      const head = lines[0];
+      if (lines.length > 1 && !isItem(head) && head.length <= 48) {
+        const rest = lines.slice(1);
+        const items = rest.filter(isItem);
+        if (items.length === rest.length) {
+          return { title: head, items: items.map(l => l.replace(/^(•|-|\*|\d+[.)])\s/, '')), ordered: /^\d/.test(rest[0]) };
+        }
+        return { title: head, text: rest.join(' ') };
+      }
+      return { text: lines.join(' ') };
+    });
   }
-
-  startEditAbout() {
-    this.aboutEdit    = { ...this.aboutContent };
-    this.editingAbout = true;
-  }
-
+  startEditAbout() { this.aboutEdit = { ...this.about }; this.editingAbout = true; }
   saveAbout() {
-    this.http.put<any>(`${this.api}/about`, this.aboutEdit,
-      { headers: this.getHeaders() }).subscribe({
-      next: (r) => { this.aboutContent = r; this.editingAbout = false; this.showToast('About page updated'); },
-      error: () => this.showToast('Save failed', false)
+    this.aboutSaving = true;
+    this.call<any>('PUT', '/about', this.aboutEdit).subscribe({
+      next: r => {
+        this.about = r; this.aboutBlocks = this.parseAbout(r.about_body || '');
+        this.editingAbout = false; this.aboutSaving = false; this.flash('About page saved');
+      },
+      error: e => { this.aboutSaving = false; this.flash(this.errText(e, 'Save failed'), false); },
     });
   }
-
-  // ── SUGGESTIONS ────────────────────────────────────────────────────────────
-  submitSuggestion() {
-    this.suggErr = '';
-    if (!this.suggTitle?.trim() || !this.suggMsg?.trim()) {
-      this.suggErr = 'Please fill in both fields.'; return;
-    }
-    this.http.post<any>(`${this.api}/suggestions`,
-      { title: this.suggTitle, message: this.suggMsg },
-      { headers: this.getHeaders() }).subscribe({
-      next: () => { this.suggSent = true; this.suggTitle = ''; this.suggMsg = ''; },
-      error: () => { this.suggErr = 'Failed to send. Please try again.'; }
+  sendSuggestion() {
+    this.sgError = '';
+    if (this.sgTitle.trim().length < 3) { this.sgError = 'Give your idea a short title.'; return; }
+    if (this.sgMsg.trim().length < 10) { this.sgError = 'Add a little more detail (10+ characters).'; return; }
+    this.sgSending = true;
+    this.call('POST', '/suggestions', { title: this.sgTitle, message: this.sgMsg, category: this.sgCategory }).subscribe({
+      next: () => { this.sgSending = false; this.sgSent = true; this.sgTitle = ''; this.sgMsg = ''; },
+      error: e => { this.sgSending = false; this.sgError = this.errText(e, 'Could not send. Please try again.'); },
     });
   }
+  newSuggestion() { this.sgSent = false; this.sgError = ''; }
 
-  loadAdminSuggestions() {
-    this.http.get<any>(`${this.api}/admin/suggestions`,
-      { headers: this.getHeaders() }).subscribe({
-      next: (r) => { this.adminSuggestions = r.suggestions || []; },
-      error: () => {}
+  // ═════════════ admin ═════════════
+  loadAdmin(spinner = true) {
+    if (!this.isAdmin) return;
+    if (spinner) this.adminLoading = true;
+    this.call<any>('GET', '/admin/stats').subscribe({ next: s => this.adminStats = s, error: () => {} });
+    this.call<any>('GET', '/admin/users').subscribe({
+      next: r => { this.adminUsers = r.users || []; this.adminLoading = false; },
+      error: e => { this.adminLoading = false; if (spinner) this.flash(this.errText(e, 'Could not load users'), false); },
+    });
+    this.call<any>('GET', '/admin/suggestions').subscribe({ next: r => this.adminSugg = r.suggestions || [], error: () => {} });
+  }
+  get shownUsers(): any[] {
+    const q = this.userSearch.trim().toLowerCase();
+    return this.adminUsers.filter(u => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+  }
+  get shownSugg(): any[] {
+    return this.adminSugg.filter(s => this.suggFilter === 'all' || s.status === this.suggFilter);
+  }
+  get newSuggCount(): number { return this.adminSugg.filter(s => s.status === 'new').length; }
+  toggleRole(u: any) {
+    const to = !u.is_admin;
+    if (!confirm(`${to ? 'Make' : 'Remove'} ${u.name} ${to ? 'an admin' : 'as admin'}?`)) return;
+    this.call('PATCH', `/admin/users/${u.id}`, { is_admin: to }).subscribe({
+      next: () => { this.flash('Role updated'); this.loadAdmin(false); },
+      error: e => this.flash(this.errText(e), false),
     });
   }
-
-  updateSuggStatus(s: any) {
-    this.http.patch(`${this.api}/admin/suggestions/${s.id}`,
-      { status: s.status }, { headers: this.getHeaders() }).subscribe();
+  deleteUser(u: any) {
+    if (!confirm(`Delete ${u.name} (${u.email}) and all their transactions? This cannot be undone.`)) return;
+    this.call('DELETE', `/admin/users/${u.id}`).subscribe({
+      next: () => { this.flash(`${u.name} deleted`); this.loadAdmin(false); },
+      error: e => this.flash(this.errText(e), false),
+    });
   }
-
-  private scroll(){setTimeout(()=>{if(this.chatWin?.nativeElement)this.chatWin.nativeElement.scrollTop=9999;},50);}
+  setSuggStatus(s: any) {
+    this.call('PATCH', `/admin/suggestions/${s.id}`, { status: s.status }).subscribe({
+      next: () => this.loadAdmin(false), error: e => this.flash(this.errText(e), false),
+    });
+  }
+  deleteSugg(s: any) {
+    if (!confirm('Delete this suggestion?')) return;
+    this.call('DELETE', `/admin/suggestions/${s.id}`).subscribe({ next: () => this.loadAdmin(false), error: () => {} });
+  }
+  catIcon(id: string): string { return this.sgCategories.find(c => c.id === id)?.icon || '💬'; }
 }

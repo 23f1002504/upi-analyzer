@@ -1,2 +1,0 @@
-# upi-analyzer
-RAG Project
